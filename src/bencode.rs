@@ -6,6 +6,7 @@ pub enum BencodeError {
     UnexpectedEnd,
     InvalidInteger(String),
     InvalidStringLength(String),
+    InvalidDictionaryKey(String),
 }
 
 impl std::fmt::Display for BencodeError {
@@ -15,6 +16,7 @@ impl std::fmt::Display for BencodeError {
             BencodeError::UnexpectedEnd => write!(f, "Unexpected end of input"),
             BencodeError::InvalidInteger(s) => write!(f, "Invalid integer: {}", s),
             BencodeError::InvalidStringLength(s) => write!(f, "Invalid string length: {}", s),
+            BencodeError::InvalidDictionaryKey(s) => write!(f, "Invalid dictionary key: {}", s),
         }
     }
 }
@@ -31,6 +33,7 @@ fn parse_value(encoded_value: &[u8], pos: &mut usize) -> Result<serde_json::Valu
         b'i' => parse_integer(encoded_value, pos),
         b'0'..=b'9' => parse_string(encoded_value, pos),
         b'l' => parse_list(encoded_value, pos),
+        b'd' => parse_dictionary(encoded_value, pos),
         _ => Err(BencodeError::UnexpectedByte(encoded_value[*pos])),
     }
 }
@@ -133,6 +136,36 @@ fn parse_list(encoded_value: &[u8], pos: &mut usize) -> Result<serde_json::Value
     return Ok(serde_json::Value::Array(values));
 }
 
+fn parse_dictionary(
+    encoded_value: &[u8],
+    pos: &mut usize,
+) -> Result<serde_json::Value, BencodeError> {
+    let mut entries: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
+
+    // consume the d
+    *pos += 1;
+
+    loop {
+        let key = parse_value(encoded_value, pos)?;
+        let value = parse_value(encoded_value, pos)?;
+
+        if !key.is_string() {
+            return Err(BencodeError::InvalidDictionaryKey(key.to_string()));
+        }
+
+        entries.insert(key.as_str().unwrap().to_string(), value);
+
+        if encoded_value[*pos] == b'e' {
+            break;
+        }
+    }
+
+    // consume the e
+    *pos += 1;
+
+    return Ok(serde_json::Value::Object(entries));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,5 +213,35 @@ mod tests {
         assert_eq!(result.as_array().unwrap().len(), 2);
         assert!(result.as_array().unwrap()[0].is_array());
         assert_eq!(result.as_array().unwrap()[1].as_i64().unwrap(), 5);
+    }
+
+    #[test]
+    fn test_decode_dictionary() {
+        let value = "d3:foo3:bar5:helloi52ee";
+        let result = decode_bencoded_value(&value).unwrap();
+
+        assert!(result.is_object());
+        assert_eq!(result.as_object().unwrap().keys().len(), 2);
+        assert_eq!(
+            result
+                .as_object()
+                .unwrap()
+                .get("foo")
+                .unwrap()
+                .as_str()
+                .unwrap(),
+            "bar"
+        );
+
+        assert_eq!(
+            result
+                .as_object()
+                .unwrap()
+                .get("hello")
+                .unwrap()
+                .as_i64()
+                .unwrap(),
+            52
+        );
     }
 }
