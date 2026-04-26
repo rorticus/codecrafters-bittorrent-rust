@@ -146,6 +146,10 @@ fn parse_dictionary(
     *pos += 1;
 
     loop {
+        if encoded_value[*pos] == b'e' {
+            break;
+        }
+
         let key = parse_value(encoded_value, pos)?;
         let value = parse_value(encoded_value, pos)?;
 
@@ -154,10 +158,6 @@ fn parse_dictionary(
         }
 
         entries.insert(key.as_str().unwrap().to_string(), value);
-
-        if encoded_value[*pos] == b'e' {
-            break;
-        }
     }
 
     // consume the e
