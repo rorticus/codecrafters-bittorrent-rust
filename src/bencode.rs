@@ -127,6 +127,9 @@ fn parse_list(encoded_value: &[u8], pos: &mut usize) -> Result<serde_json::Value
         }
     }
 
+    //consome the e
+    *pos += 1;
+
     return Ok(serde_json::Value::Array(values));
 }
 
@@ -166,5 +169,16 @@ mod tests {
         assert!(result.is_array());
         assert_eq!(result.as_array().unwrap()[0].as_str().unwrap(), "hello");
         assert_eq!(result.as_array().unwrap()[1].as_i64().unwrap(), 16);
+    }
+
+    #[test]
+    fn test_decode_list_2() {
+        let value = "lli4eei5ee";
+        let result = decode_bencoded_value(&value).unwrap();
+
+        assert!(result.is_array());
+        assert_eq!(result.as_array().unwrap().len(), 2);
+        assert!(result.as_array().unwrap()[0].is_array());
+        assert_eq!(result.as_array().unwrap()[1].as_i64().unwrap(), 5);
     }
 }
