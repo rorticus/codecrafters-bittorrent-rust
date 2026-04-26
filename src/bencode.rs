@@ -23,9 +23,9 @@ impl std::fmt::Display for BencodeError {
 
 impl std::error::Error for BencodeError {}
 
-pub fn decode_bencoded_value(encoded_value: &str) -> Result<serde_json::Value, BencodeError> {
+pub fn decode_bencoded_value(encoded_value: &[u8]) -> Result<serde_json::Value, BencodeError> {
     let mut pos = 0;
-    return parse_value(encoded_value.as_bytes(), &mut pos);
+    return parse_value(encoded_value, &mut pos);
 }
 
 fn parse_value(encoded_value: &[u8], pos: &mut usize) -> Result<serde_json::Value, BencodeError> {
@@ -172,7 +172,7 @@ mod tests {
 
     #[test]
     fn test_decode_integer() {
-        let value = "i54e";
+        let value = "i54e".as_bytes();
         let result = decode_bencoded_value(&value).unwrap();
         assert!(result.is_i64());
         assert_eq!(result.as_i64().unwrap(), 54);
@@ -180,7 +180,7 @@ mod tests {
 
     #[test]
     fn test_decode_negative_integer() {
-        let value = "i-54e";
+        let value = "i-54e".as_bytes();
         let result = decode_bencoded_value(&value).unwrap();
         assert!(result.is_i64());
         assert_eq!(result.as_i64().unwrap(), -54);
@@ -188,7 +188,7 @@ mod tests {
 
     #[test]
     fn test_decode_string() {
-        let value = "5:hello";
+        let value = "5:hello".as_bytes();
         let result = decode_bencoded_value(&value).unwrap();
         assert!(result.is_string());
         assert_eq!(result.as_str().unwrap(), "hello");
@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     fn test_decode_list() {
-        let value = "l5:helloi16ee";
+        let value = "l5:helloi16ee".as_bytes();
         let result = decode_bencoded_value(&value).unwrap();
 
         assert!(result.is_array());
@@ -206,7 +206,7 @@ mod tests {
 
     #[test]
     fn test_decode_list_2() {
-        let value = "lli4eei5ee";
+        let value = "lli4eei5ee".as_bytes();
         let result = decode_bencoded_value(&value).unwrap();
 
         assert!(result.is_array());
@@ -217,7 +217,7 @@ mod tests {
 
     #[test]
     fn test_decode_dictionary() {
-        let value = "d3:foo3:bar5:helloi52ee";
+        let value = "d3:foo3:bar5:helloi52ee".as_bytes();
         let result = decode_bencoded_value(&value).unwrap();
 
         assert!(result.is_object());

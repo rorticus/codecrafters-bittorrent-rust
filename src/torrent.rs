@@ -19,7 +19,7 @@ pub struct SingleTorrentManifest {
 }
 
 pub fn parse_torrent(bytes: &[u8]) -> Result<SingleTorrentManifest, Box<dyn std::error::Error>> {
-    let value = decode_bencoded_value(&std::str::from_utf8(bytes)?)?;
+    let value = decode_bencoded_value(bytes)?;
 
     return Ok(serde_json::from_value(value)?);
 }

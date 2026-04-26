@@ -14,7 +14,7 @@ fn main() {
         eprintln!("Logs from your program will appear here!");
 
         let encoded_value = &args[2];
-        let decoded_value = bencode::decode_bencoded_value(encoded_value).unwrap();
+        let decoded_value = bencode::decode_bencoded_value(encoded_value.as_bytes()).unwrap();
         println!("{}", decoded_value.to_string());
     } else if command == "info" {
         // read the file
