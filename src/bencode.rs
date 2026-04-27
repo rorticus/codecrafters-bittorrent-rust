@@ -1,12 +1,11 @@
 use serde_json;
 
-use base64::{Engine, alphabet::STANDARD, engine::general_purpose};
+use base64::{Engine, engine::general_purpose};
 
 #[derive(Debug)]
 pub enum BencodeError {
     UnexpectedByte(u8),
     UnexpectedEnd,
-    UnexpectedEndReadingString,
     InvalidInteger(String),
     InvalidStringLength(String),
     InvalidDictionaryKey(String),
@@ -17,9 +16,6 @@ impl std::fmt::Display for BencodeError {
         match self {
             BencodeError::UnexpectedByte(b) => write!(f, "Unexpected byte: {}", b),
             BencodeError::UnexpectedEnd => write!(f, "Unexpected end of input"),
-            BencodeError::UnexpectedEndReadingString => {
-                write!(f, "Unexpected end of input while reading string")
-            }
             BencodeError::InvalidInteger(s) => write!(f, "Invalid integer: {}", s),
             BencodeError::InvalidStringLength(s) => write!(f, "Invalid string length: {}", s),
             BencodeError::InvalidDictionaryKey(s) => write!(f, "Invalid dictionary key: {}", s),
@@ -254,8 +250,6 @@ fn bencode_integer(value: &serde_json::Value) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use super::*;
 
     #[test]

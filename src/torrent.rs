@@ -1,6 +1,6 @@
-use serde;
+use base64::{Engine, engine::general_purpose};
+use serde::{self, Deserialize};
 use serde_json;
-use sha1::{Digest, Sha1};
 
 use crate::bencode::{bencode_value, decode_bencoded_value};
 
@@ -10,7 +10,11 @@ pub struct TorrentInfo {
     pub name: String,
     #[serde(rename = "piece length")]
     pub piece_length: i64,
-    pub pieces: String,
+    #[serde(
+        deserialize_with = "deserialize_pieces",
+        serialize_with = "serialize_pieces"
+    )]
+    pub pieces: Vec<Vec<u8>>,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -32,9 +36,37 @@ pub fn serialize_torrent_info(
     return Ok(bencode_value(&as_value));
 }
 
+fn deserialize_pieces<'de, D>(deserializer: D) -> Result<Vec<Vec<u8>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    let bytes = if s.starts_with("data://base64,") {
+        general_purpose::STANDARD
+            .decode(&s[14..])
+            .map_err(serde::de::Error::custom)?
+    } else {
+        s.into_bytes()
+    };
+
+    Ok(bytes.chunks(20).map(|c| c.to_vec()).collect())
+}
+
+fn serialize_pieces<D>(pieces: &Vec<Vec<u8>>, serializer: D) -> Result<D::Ok, D::Error>
+where
+    D: serde::Serializer,
+{
+    let flat: Vec<u8> = pieces.iter().flatten().cloned().collect();
+
+    let encoded = format!("data://base64,{}", general_purpose::STANDARD.encode(&flat));
+    serializer.serialize_str(&encoded)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use sha1::{Digest, Sha1};
 
     #[test]
     fn test_parse_single_file() {

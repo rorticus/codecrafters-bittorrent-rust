@@ -36,6 +36,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("Tracker URL: {}", manifest.announce);
                 println!("Length: {}", manifest.info.length);
                 println!("Info Hash: {}", hex);
+                println!("Piece Hashes:");
+                for hash in manifest.info.pieces {
+                    let hex: String = hash.iter().map(|b| format!("{:20x}", b)).collect();
+                    println!("{}", hex);
+                }
             }
             Err(e) => {
                 println!("Unable to parse {}, {}", &args[2], e);
