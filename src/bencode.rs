@@ -228,13 +228,14 @@ fn bencode_string(value: &serde_json::Value) -> Vec<u8> {
 
     let str = value.as_str().unwrap();
 
-    bytes.extend(format!("{}", str.len()).as_bytes());
-    bytes.push(b':');
-
     if str.starts_with("data://base64,") {
         let decoded = general_purpose::STANDARD.decode(&str[14..]).unwrap();
+        bytes.extend(format!("{}", decoded.len()).as_bytes());
+        bytes.push(b':');
         bytes.extend(decoded);
     } else {
+        bytes.extend(format!("{}", str.len()).as_bytes());
+        bytes.push(b':');
         bytes.extend(str.as_bytes());
     }
 
