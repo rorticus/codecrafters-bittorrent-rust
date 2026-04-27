@@ -39,7 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("Piece Length: {}", manifest.info.piece_length);
                 println!("Piece Hashes:");
                 for hash in manifest.info.pieces {
-                    let hex: String = hash.iter().map(|b| format!("{:2x}", b)).collect();
+                    let hex: String = hash.iter().map(|b| format!("{:02x}", b)).collect();
                     println!("{}", hex);
                 }
             }
