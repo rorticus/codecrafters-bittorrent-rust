@@ -24,10 +24,10 @@ pub fn parse_torrent(bytes: &[u8]) -> Result<SingleTorrentManifest, Box<dyn std:
     return Ok(serde_json::from_value(value)?);
 }
 
-pub fn serialize_torrent(
+pub fn serialize_torrent_info(
     torrent: &SingleTorrentManifest,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let as_value = serde_json::to_value(&torrent)?;
+    let as_value = serde_json::to_value(&torrent.info)?;
     return Ok(bencode_value(&as_value));
 }
 

@@ -2,10 +2,7 @@ use std::env;
 
 use sha1::{Digest, Sha1};
 
-use crate::{
-    bencode::bencode_value,
-    torrent::{parse_torrent, serialize_torrent},
-};
+use crate::torrent::{parse_torrent, serialize_torrent_info};
 
 mod bencode;
 mod torrent;
@@ -27,7 +24,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         match parse_torrent(&bytes) {
             Ok(manifest) => {
-                let encoded_manifest = serialize_torrent(&manifest)?;
+                let encoded_manifest = serialize_torrent_info(&manifest)?;
 
                 let mut hasher = Sha1::new();
                 hasher.update(encoded_manifest);
