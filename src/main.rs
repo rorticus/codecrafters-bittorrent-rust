@@ -31,6 +31,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let result = hasher.finalize();
                 let hex = format!("{:x}", result);
 
+                println!("{:?}", bytes);
+
                 println!("Tracker URL: {}", manifest.announce);
                 println!("Length: {}", manifest.info.length);
                 println!("Info Hash: {}", hex);
