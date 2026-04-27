@@ -1,6 +1,11 @@
 use std::env;
 
-use crate::torrent::parse_torrent;
+use sha1::{Digest, Sha1};
+
+use crate::{
+    bencode::bencode_value,
+    torrent::{parse_torrent, serialize_torrent},
+};
 
 mod bencode;
 mod torrent;
@@ -19,12 +24,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else if command == "info" {
         // read the file
         let bytes = std::fs::read(&args[2])?;
-        let manifest = parse_torrent(&bytes);
 
         match parse_torrent(&bytes) {
             Ok(manifest) => {
+                let encoded_manifest = serialize_torrent(&manifest)?;
+
+                let mut hasher = Sha1::new();
+                hasher.update(encoded_manifest);
+                let result = hasher.finalize();
+                let hex = format!("{:x}", result);
+
                 println!("Tracker URL: {}", manifest.announce);
                 println!("Length: {}", manifest.info.length);
+                println!("Info Hash: {}", hex);
             }
             Err(e) => {
                 println!("Unable to parse {}, {}", &args[2], e);

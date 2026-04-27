@@ -1,9 +1,9 @@
 use serde;
 use serde_json;
 
-use crate::bencode::decode_bencoded_value;
+use crate::bencode::{bencode_value, decode_bencoded_value};
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct TorrentInfo {
     pub length: i64,
     pub name: String,
@@ -12,7 +12,7 @@ pub struct TorrentInfo {
     pub pieces: String,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct SingleTorrentManifest {
     pub announce: String,
     pub info: TorrentInfo,
@@ -22,6 +22,13 @@ pub fn parse_torrent(bytes: &[u8]) -> Result<SingleTorrentManifest, Box<dyn std:
     let value = decode_bencoded_value(bytes)?;
 
     return Ok(serde_json::from_value(value)?);
+}
+
+pub fn serialize_torrent(
+    torrent: &SingleTorrentManifest,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let as_value = serde_json::to_value(&torrent)?;
+    return Ok(bencode_value(&as_value));
 }
 
 #[cfg(test)]
