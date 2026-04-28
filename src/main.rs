@@ -1,8 +1,6 @@
 use std::env;
 
-use sha1::{Digest, Sha1};
-
-use crate::torrent::{parse_torrent, serialize_torrent_info};
+use crate::torrent::{calculate_info_hash, get_peers, parse_torrent};
 
 mod bencode;
 mod torrent;
@@ -24,12 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         match parse_torrent(&bytes) {
             Ok(manifest) => {
-                let encoded_manifest = serialize_torrent_info(&manifest)?;
-
-                let mut hasher = Sha1::new();
-                hasher.update(encoded_manifest);
-                let result = hasher.finalize();
-                let hex = format!("{:x}", result);
+                let hex = calculate_info_hash(&manifest)?;
 
                 println!("{:?}", bytes);
 
@@ -41,6 +34,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for hash in manifest.info.pieces {
                     let hex: String = hash.iter().map(|b| format!("{:02x}", b)).collect();
                     println!("{}", hex);
+                }
+            }
+            Err(e) => {
+                println!("Unable to parse {}, {}", &args[2], e);
+                println!("{:?}", bytes);
+            }
+        }
+    } else if command == "peers" {
+        let bytes = std::fs::read(&args[2])?;
+
+        match parse_torrent(&bytes) {
+            Ok(manifest) => {
+                let peers = get_peers(&manifest);
+
+                for peer in peers {
+                    println!("{}:{}", peer.ip, peer.port);
                 }
             }
             Err(e) => {

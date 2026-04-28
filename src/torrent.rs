@@ -1,6 +1,8 @@
 use base64::{Engine, engine::general_purpose};
 use serde::{self, Deserialize};
 use serde_json;
+use sha1::{Digest, Sha1};
+use std::net::Ipv4Addr;
 
 use crate::bencode::{bencode_value, decode_bencoded_value};
 
@@ -21,6 +23,21 @@ pub struct TorrentInfo {
 pub struct SingleTorrentManifest {
     pub announce: String,
     pub info: TorrentInfo,
+}
+#[derive(Debug)]
+pub struct AnnounceResponsePeer {
+    pub ip: String,
+    pub port: i16,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+pub struct AnnounceResponse {
+    pub interval: i64,
+    #[serde(
+        deserialize_with = "deserialize_peers",
+        serialize_with = "serialize_peers"
+    )]
+    pub peers: Vec<AnnounceResponsePeer>,
 }
 
 pub fn parse_torrent(bytes: &[u8]) -> Result<SingleTorrentManifest, Box<dyn std::error::Error>> {
@@ -60,6 +77,115 @@ where
 
     let encoded = format!("data://base64,{}", general_purpose::STANDARD.encode(&flat));
     serializer.serialize_str(&encoded)
+}
+
+fn deserialize_peers<'de, D>(deserializer: D) -> Result<Vec<AnnounceResponsePeer>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    let bytes = if s.starts_with("data://base64,") {
+        general_purpose::STANDARD
+            .decode(&s[14..])
+            .map_err(serde::de::Error::custom)?
+    } else {
+        s.into_bytes()
+    };
+
+    let peer_chunks: Vec<Vec<u8>> = bytes.chunks(6).map(|c| c.to_vec()).collect();
+    let peers: Vec<AnnounceResponsePeer> = peer_chunks
+        .into_iter()
+        .map(|p| AnnounceResponsePeer {
+            ip: format!("{}.{}.{}.{}", p[0], p[1], p[2], p[3]),
+            port: i16::from_be_bytes([p[4], p[5]]),
+        })
+        .collect();
+
+    Ok(peers)
+}
+
+fn serialize_peers<D>(peers: &Vec<AnnounceResponsePeer>, serializer: D) -> Result<D::Ok, D::Error>
+where
+    D: serde::Serializer,
+{
+    let flat: Vec<u8> = peers
+        .iter()
+        .map(|p| {
+            let mut bytes: Vec<u8> = Vec::new();
+            let addr: Ipv4Addr = p.ip.parse().expect("Invalid IPv4 address");
+
+            bytes.extend(addr.octets());
+            bytes.extend(p.port.to_be_bytes());
+
+            return bytes;
+        })
+        .flatten()
+        .collect();
+
+    let encoded = format!("data://base64,{}", general_purpose::STANDARD.encode(&flat));
+    serializer.serialize_str(&encoded)
+}
+
+pub fn calculate_info_hash(
+    torrent: &SingleTorrentManifest,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let encoded_manifest = serialize_torrent_info(&torrent)?;
+
+    let mut hasher = Sha1::new();
+    hasher.update(encoded_manifest);
+    let result = hasher.finalize();
+    let hex = format!("{:x}", result);
+
+    return Ok(hex);
+}
+
+pub fn get_peers(torrent: &SingleTorrentManifest) -> Vec<AnnounceResponsePeer> {
+    let info_hash = match calculate_info_hash(torrent) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+
+    let client = reqwest::blocking::Client::new();
+
+    let response = match client
+        .get(&torrent.announce)
+        .query(&[
+            ("info_hash", info_hash),
+            ("peer_id", "12345678901234567890".to_string()),
+            ("port", "6881".to_string()),
+            ("uploaded", "0".to_string()),
+            ("downloaded", "0".to_string()),
+            ("left", format!("{}", torrent.info.length)),
+            ("compact", "1".to_string()),
+        ])
+        .send()
+    {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+
+    let response_bytes = match response.bytes() {
+        Ok(b) => b,
+        Err(_) => return Vec::new(),
+    };
+
+    let decoded = match decode_bencoded_value(&response_bytes) {
+        Ok(b) => b,
+        Err(_) => {
+            eprintln!("error decoding response");
+            return Vec::new();
+        }
+    };
+
+    let response: AnnounceResponse = match serde_json::from_value(decoded) {
+        Ok(p) => p,
+        Err(_) => {
+            eprintln!("Error parsing response");
+            return Vec::new();
+        }
+    };
+
+    return response.peers;
 }
 
 #[cfg(test)]
