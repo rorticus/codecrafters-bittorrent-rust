@@ -3,6 +3,8 @@ use serde::{self, Deserialize};
 use serde_json;
 use sha1::{Digest, Sha1};
 use std::net::Ipv4Addr;
+use url::Url;
+use urlencoding;
 
 use crate::bencode::{bencode_value, decode_bencoded_value};
 
@@ -150,17 +152,22 @@ pub fn get_peers(torrent: &SingleTorrentManifest) -> Vec<AnnounceResponsePeer> {
 
     let client = reqwest::blocking::Client::new();
 
+    let mut url = Url::parse(&torrent.announce).expect("bad url parsing");
+    url.query_pairs_mut()
+        .append_pair("peer_id", "12345678901234567890")
+        .append_pair("port", "6881")
+        .append_pair("uploaded", "0")
+        .append_pair("downloaded", "0")
+        .append_pair("left", &format!("{}", torrent.info.length))
+        .append_pair("compact", "1");
+
     let response = match client
-        .get(&torrent.announce)
-        .query(&[
-            ("info_hash", &info_hash as &[u8]),
-            ("peer_id", "12345678901234567890".as_bytes()),
-            ("port", "6881".as_bytes()),
-            ("uploaded", "0".as_bytes()),
-            ("downloaded", "0".as_bytes()),
-            ("left", format!("{}", torrent.info.length).as_bytes()),
-            ("compact", "1".as_bytes()),
-        ])
+        .get(format!(
+            "{}?{}&info_hash={}",
+            &torrent.announce,
+            url.query().unwrap_or(""),
+            urlencoding::encode_binary(&info_hash)
+        ))
         .send()
     {
         Ok(v) => v,
