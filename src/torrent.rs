@@ -29,7 +29,7 @@ pub struct SingleTorrentManifest {
 #[derive(Debug)]
 pub struct AnnounceResponsePeer {
     pub ip: String,
-    pub port: i16,
+    pub port: u16,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -99,7 +99,7 @@ where
         .into_iter()
         .map(|p| AnnounceResponsePeer {
             ip: format!("{}.{}.{}.{}", p[0], p[1], p[2], p[3]),
-            port: i16::from_be_bytes([p[4], p[5]]),
+            port: u16::from_be_bytes([p[4], p[5]]),
         })
         .collect();
 
