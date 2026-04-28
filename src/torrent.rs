@@ -140,8 +140,11 @@ pub fn calculate_info_hash(
 }
 
 pub fn get_peers(torrent: &SingleTorrentManifest) -> Vec<AnnounceResponsePeer> {
-    let info_hash = match calculate_info_hash(torrent) {
-        Ok(v) => v,
+    let info_hash: Vec<u8> = match calculate_info_hash(torrent) {
+        Ok(v) => (0..v.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&v[i..i + 2], 16).unwrap())
+            .collect(),
         Err(_) => return Vec::new(),
     };
 
@@ -150,13 +153,13 @@ pub fn get_peers(torrent: &SingleTorrentManifest) -> Vec<AnnounceResponsePeer> {
     let response = match client
         .get(&torrent.announce)
         .query(&[
-            ("info_hash", info_hash),
-            ("peer_id", "12345678901234567890".to_string()),
-            ("port", "6881".to_string()),
-            ("uploaded", "0".to_string()),
-            ("downloaded", "0".to_string()),
-            ("left", format!("{}", torrent.info.length)),
-            ("compact", "1".to_string()),
+            ("info_hash", &info_hash as &[u8]),
+            ("peer_id", "12345678901234567890".as_bytes()),
+            ("port", "6881".as_bytes()),
+            ("uploaded", "0".as_bytes()),
+            ("downloaded", "0".as_bytes()),
+            ("left", format!("{}", torrent.info.length).as_bytes()),
+            ("compact", "1".as_bytes()),
         ])
         .send()
     {
