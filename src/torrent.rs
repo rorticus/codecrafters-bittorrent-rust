@@ -1,8 +1,13 @@
 use base64::{Engine, engine::general_purpose};
+use rand;
 use serde::{self, Deserialize};
 use serde_json;
 use sha1::{Digest, Sha1};
+use std::io::Read;
+use std::io::Write;
 use std::net::Ipv4Addr;
+use std::net::SocketAddrV4;
+use std::net::TcpStream;
 use url::Url;
 use urlencoding;
 
@@ -40,6 +45,54 @@ pub struct AnnounceResponse {
         serialize_with = "serialize_peers"
     )]
     pub peers: Vec<AnnounceResponsePeer>,
+}
+
+#[derive(Debug)]
+pub struct Handshake {
+    // length of the protocol string (BitTorrent protocol) which is 19 (1 byte)
+    // the string BitTorrent protocol (19 bytes)
+    // eight reserved bytes, which are all set to zero (8 bytes)
+    // sha1 infohash (20 bytes) (NOT the hexadecimal representation, which is 40 bytes long)
+    // peer id (20 bytes) (generate 20 random byte values)
+    pub length: u8,
+    pub protocol: String,
+    pub info_hash: Vec<u8>,
+    pub peer_id: Vec<u8>,
+}
+
+impl Handshake {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
+        let protocol_length = usize::from(bytes[0]);
+
+        if bytes.len() < 1 + protocol_length as usize {
+            return Err("Packet not large enough".to_string());
+        }
+
+        let protocol =
+            str::from_utf8(&bytes[1..(1 + protocol_length)]).map_err(|e| e.to_string())?;
+
+        let info_hash = &bytes[(1 + protocol_length + 8)..(1 + protocol_length + 8 + 20)];
+        let peer_id = &bytes[(1 + protocol_length + 8 + 20)..(1 + protocol_length + 8 + 40)];
+
+        Ok(Handshake {
+            length: protocol_length as u8,
+            protocol: protocol.to_string(),
+            info_hash: Vec::from(info_hash),
+            peer_id: Vec::from(peer_id),
+        })
+    }
+
+    pub fn to_bytes(self: &Self) -> Vec<u8> {
+        let mut bytes: Vec<u8> = Vec::new();
+
+        bytes.push(self.length);
+        bytes.extend(self.protocol.as_bytes());
+        bytes.extend([0, 0, 0, 0, 0, 0, 0, 0]);
+        bytes.extend(&self.info_hash);
+        bytes.extend(&self.peer_id);
+
+        return bytes;
+    }
 }
 
 pub fn parse_torrent(bytes: &[u8]) -> Result<SingleTorrentManifest, Box<dyn std::error::Error>> {
@@ -141,14 +194,21 @@ pub fn calculate_info_hash(
     return Ok(hex);
 }
 
-pub fn get_peers(torrent: &SingleTorrentManifest) -> Vec<AnnounceResponsePeer> {
-    let info_hash: Vec<u8> = match calculate_info_hash(torrent) {
+pub fn info_hash_as_bytes(hash: &Result<String, Box<dyn std::error::Error>>) -> Vec<u8> {
+    let info_hash: Vec<u8> = match hash {
         Ok(v) => (0..v.len())
             .step_by(2)
             .map(|i| u8::from_str_radix(&v[i..i + 2], 16).unwrap())
             .collect(),
         Err(_) => return Vec::new(),
     };
+
+    return info_hash;
+}
+
+pub fn get_peers(torrent: &SingleTorrentManifest) -> Vec<AnnounceResponsePeer> {
+    let hash_str = calculate_info_hash(torrent);
+    let info_hash: Vec<u8> = info_hash_as_bytes(&hash_str);
 
     let client = reqwest::blocking::Client::new();
 
@@ -196,6 +256,49 @@ pub fn get_peers(torrent: &SingleTorrentManifest) -> Vec<AnnounceResponsePeer> {
     };
 
     return response.peers;
+}
+
+pub fn random_peer_id() -> Vec<u8> {
+    let result: Vec<u8> = (0..20)
+        .into_iter()
+        .map(|_| {
+            let c: u8 = rand::random();
+            c
+        })
+        .collect();
+
+    return result;
+}
+
+pub fn handshake(torrent: &SingleTorrentManifest, peer: &String) -> Handshake {
+    let info_hash_str = calculate_info_hash(&torrent);
+    let info_hash_bytes = info_hash_as_bytes(&info_hash_str);
+
+    let handshake_out = Handshake {
+        length: 19,
+        protocol: "BitTorrent protocol".to_string(),
+        info_hash: info_hash_bytes,
+        peer_id: random_peer_id(),
+    };
+    let handshake_bytes = handshake_out.to_bytes();
+
+    let peer_addr: SocketAddrV4 = peer.parse().expect("Invalid ipv4 address");
+
+    let mut stream = TcpStream::connect(&peer_addr).expect("Failed to open tcp stream to peer");
+
+    // write the handshake
+    stream
+        .write_all(&handshake_bytes)
+        .expect("Failed writing to peer");
+
+    // read the handshake
+    let mut buf = [0u8; 1024];
+    let n = stream.read(&mut buf).expect("Failed reading tcp stream");
+    let received = &buf[..n];
+
+    let handshake_in = Handshake::from_bytes(received).expect("Failed to parse incoming handshake");
+
+    return handshake_in;
 }
 
 #[cfg(test)]

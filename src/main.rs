@@ -1,6 +1,9 @@
 use std::env;
 
-use crate::torrent::{calculate_info_hash, get_peers, parse_torrent};
+use crate::torrent::{
+    Handshake, calculate_info_hash, get_peers, handshake, info_hash_as_bytes, parse_torrent,
+    random_peer_id,
+};
 
 mod bencode;
 mod torrent;
@@ -57,6 +60,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{:?}", bytes);
             }
         }
+    } else if command == "handshake" {
+        let torrent_file = &args[2];
+        let peer = &args[3];
+
+        let torrent_bytes = std::fs::read(torrent_file).expect("Error reading torrent file");
+        let manifest = parse_torrent(&torrent_bytes).expect("Error parsing torrent");
+
+        let result = handshake(&manifest, peer);
+
+        let peer_id_str: String = result
+            .peer_id
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect();
+
+        println!("Peer ID: {}", peer_id_str);
     } else {
         println!("unknown command: {}", args[1])
     }
