@@ -60,6 +60,107 @@ pub struct Handshake {
     pub peer_id: Vec<u8>,
 }
 
+#[derive(Debug)]
+pub struct PeerMessage {
+    message_length: u32,
+    message_id: u8,
+    payload: Vec<u8>,
+}
+
+#[derive(Debug)]
+pub struct PeerConnection {
+    pub socket: TcpStream,
+    pub handshake: Handshake,
+    pub bitfield: Option<PeerMessage>,
+}
+
+// pub const MSG_CHOKE: u8 = 0;
+pub const MSG_UNCHOKE: u8 = 1;
+pub const MSG_INTERESTED: u8 = 2;
+// pub const MSG_NOT_INTERESTED: u8 = 3;
+// pub const MSG_HAVE: u8 = 4;
+pub const MSG_BITFIELD: u8 = 5;
+pub const MSG_REQUEST: u8 = 6;
+pub const MSG_PIECE: u8 = 7;
+// pub const MSG_CANCEL: u8 = 8;
+
+impl PeerMessage {
+    pub fn as_bytes(self: &Self) -> Vec<u8> {
+        let mut bytes: Vec<u8> = Vec::new();
+
+        bytes.extend(self.message_length.to_be_bytes());
+        bytes.push(self.message_id);
+        bytes.extend(&self.payload);
+
+        return bytes;
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
+        let message_id = bytes[0];
+        let payload: Vec<u8> = Vec::from(&bytes[1..bytes.len()]);
+
+        return Ok(PeerMessage {
+            message_length: bytes.len() as u32,
+            message_id,
+            payload,
+        });
+    }
+
+    pub fn interested() -> Self {
+        return PeerMessage {
+            message_length: 5,
+            message_id: MSG_INTERESTED,
+            payload: Vec::new(),
+        };
+    }
+
+    pub fn request(index: u32, begin: u32, length: u32) -> Self {
+        let mut payload: Vec<u8> = Vec::new();
+
+        payload.extend(index.to_be_bytes());
+        payload.extend(begin.to_be_bytes());
+        payload.extend(length.to_be_bytes());
+
+        return PeerMessage {
+            message_length: 5 + payload.len() as u32,
+            message_id: MSG_REQUEST,
+            payload: payload,
+        };
+    }
+}
+
+impl PeerConnection {
+    pub fn recv_message(&mut self) -> PeerMessage {
+        // read the 4 byte length prefix
+        let mut len_buf = [0u8; 4];
+        self.socket
+            .read_exact(&mut len_buf)
+            .expect("Failed reading length");
+        let len = u32::from_be_bytes(len_buf) as usize;
+
+        if len == 0 {
+            // keepalive message
+        }
+
+        // read exactly len bytes
+        let mut buf = vec![0u8; len];
+        self.socket
+            .read_exact(&mut buf)
+            .expect("Failed reading message");
+
+        // parse without the length prefix since we already consumed it
+        PeerMessage::from_bytes(&buf).expect("Failed parsing peer message")
+    }
+
+    pub fn send_message(self: &mut Self, message: &PeerMessage) {
+        let bytes = message.as_bytes();
+
+        self.socket
+            .write_all(&bytes)
+            .expect("Failed writting message to socket");
+    }
+}
+
 impl Handshake {
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
         let protocol_length = usize::from(bytes[0]);
@@ -270,7 +371,7 @@ pub fn random_peer_id() -> Vec<u8> {
     return result;
 }
 
-pub fn handshake(torrent: &SingleTorrentManifest, peer: &String) -> Handshake {
+pub fn connect_to_peer(torrent: &SingleTorrentManifest, peer: &String) -> PeerConnection {
     let info_hash_str = calculate_info_hash(&torrent);
     let info_hash_bytes = info_hash_as_bytes(&info_hash_str);
 
@@ -298,7 +399,94 @@ pub fn handshake(torrent: &SingleTorrentManifest, peer: &String) -> Handshake {
 
     let handshake_in = Handshake::from_bytes(received).expect("Failed to parse incoming handshake");
 
-    return handshake_in;
+    return PeerConnection {
+        socket: stream,
+        handshake: handshake_in,
+        bitfield: None,
+    };
+}
+
+pub fn consume_bitfield(connection: &mut PeerConnection) {
+    if connection.bitfield.is_none() {
+        let bitfield_message = connection.recv_message();
+
+        if bitfield_message.message_id != MSG_BITFIELD {
+            println!("expected bitfield, found {}", bitfield_message.message_id);
+        }
+
+        connection.bitfield = Some(bitfield_message);
+    }
+}
+
+pub fn download_piece(
+    torrent: &SingleTorrentManifest,
+    peer: &mut PeerConnection,
+    index: u32,
+) -> Vec<u8> {
+    eprintln!("consuming bitfield");
+    consume_bitfield(peer);
+
+    eprintln!("sending interested");
+    peer.send_message(&PeerMessage::interested());
+
+    let unchoke = peer.recv_message();
+    if unchoke.message_id != MSG_UNCHOKE {
+        eprintln!("Expected unchoke, got {}", unchoke.message_id);
+        return Vec::new();
+    }
+
+    let piece_size = if index == (torrent.info.pieces.len() as u32 - 1) {
+        // last piece may be smaller
+        let remainder = torrent.info.length as u32 % torrent.info.piece_length as u32;
+        if remainder == 0 {
+            torrent.info.piece_length as u32
+        } else {
+            remainder
+        }
+    } else {
+        torrent.info.piece_length as u32
+    };
+
+    let chunk_size: u32 = 16 * 1024;
+    let total_chunks: u32 = (piece_size + chunk_size - 1) / chunk_size;
+
+    let mut chunk_buffer: Vec<u8> = Vec::new();
+
+    eprintln!("chunk_size = {}", chunk_size);
+    eprintln!("total_chunks = {}", total_chunks);
+
+    for i in 0..total_chunks {
+        let this_chunk_size = if i < total_chunks - 1 {
+            chunk_size
+        } else {
+            piece_size - (i * chunk_size) // exact bytes remaining
+        };
+        eprintln!(
+            "requesting {} bytes from index {}, offset {}",
+            this_chunk_size,
+            i,
+            i * chunk_size
+        );
+
+        peer.send_message(&PeerMessage::request(
+            index,
+            i * chunk_size,
+            this_chunk_size,
+        ));
+
+        let result = loop {
+            let msg = peer.recv_message();
+            if msg.message_id == MSG_PIECE {
+                break msg;
+            }
+            eprintln!("Ignoring message: {}", msg.message_id);
+        };
+
+        let block_data = result.payload[8..result.payload.len()].iter().clone();
+        chunk_buffer.extend(block_data);
+    }
+
+    return chunk_buffer;
 }
 
 #[cfg(test)]
