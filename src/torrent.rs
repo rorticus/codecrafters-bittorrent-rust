@@ -37,6 +37,12 @@ pub struct AnnounceResponsePeer {
     pub port: u16,
 }
 
+impl AnnounceResponsePeer {
+    pub fn to_str(self: &Self) -> String {
+        return format!("{}:{}", self.ip, self.port);
+    }
+}
+
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct AnnounceResponse {
     pub interval: i64,
