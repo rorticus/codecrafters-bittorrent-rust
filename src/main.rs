@@ -9,6 +9,7 @@ use crate::torrent::{
 };
 
 mod bencode;
+mod peer;
 mod torrent;
 
 enum Job {
@@ -109,10 +110,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let torrent_bytes = std::fs::read(filename).expect("Error reading torrent file");
             let manifest = parse_torrent(&torrent_bytes).expect("Error parsing torrent");
 
-            let result = connect_to_peer(&manifest, &peer);
+            let result = connect_to_peer(&manifest, &peer)?;
 
             let peer_id_str: String = result
-                .handshake
                 .peer_id
                 .iter()
                 .map(|b| format!("{:02x}", b))
@@ -133,9 +133,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 eprintln!("no peers found");
             } else {
                 let mut result =
-                    connect_to_peer(&manifest, &format!("{}:{}", peers[0].ip, peers[0].port));
+                    connect_to_peer(&manifest, &format!("{}:{}", peers[0].ip, peers[0].port))?;
 
-                let piece = download_piece(&manifest, &mut result, piece_index);
+                let piece = download_piece(&manifest, &mut result, piece_index)?;
 
                 std::fs::write(output, &piece)?;
             }
@@ -162,17 +162,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let manifest = Arc::clone(&manifest);
                     let result_tx = result_tx.clone();
 
-                    let handle = thread::spawn(move || {
+                    let handle = thread::spawn(move || -> anyhow::Result<()> {
                         loop {
                             match rx.lock().unwrap().recv().unwrap() {
                                 Job::DownloadPiece { index, peer } => {
-                                    let mut connection = connect_to_peer(&manifest, &peer);
-                                    let data = download_piece(&manifest, &mut connection, index);
+                                    let mut connection = connect_to_peer(&manifest, &peer)?;
+                                    let data = download_piece(&manifest, &mut connection, index)?;
                                     result_tx.send((index, data)).unwrap();
                                 }
                                 Job::Shutdown => break,
                             }
                         }
+
+                        Ok(())
                     });
                     handles.push(handle);
                 }
@@ -199,7 +201,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 for handle in handles {
-                    handle.join().unwrap();
+                    handle.join().unwrap()?;
                 }
 
                 let file_data: Vec<u8> = results.into_iter().flatten().collect();

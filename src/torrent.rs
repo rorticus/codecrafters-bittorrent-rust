@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use base64::{Engine, engine::general_purpose};
 use rand;
 use serde::{self, Deserialize};
@@ -11,7 +12,10 @@ use std::net::TcpStream;
 use url::Url;
 use urlencoding;
 
+use crate::peer::PeerMessage;
+
 use crate::bencode::{bencode_value, decode_bencoded_value};
+use crate::peer::bitfield::Bitfield;
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct TorrentInfo {
@@ -67,116 +71,70 @@ pub struct Handshake {
 }
 
 #[derive(Debug)]
-pub struct PeerMessage {
-    message_length: u32,
-    message_id: u8,
-    payload: Vec<u8>,
-}
-
-#[derive(Debug)]
 pub struct PeerConnection {
     pub socket: TcpStream,
-    pub handshake: Handshake,
-    pub bitfield: Option<PeerMessage>,
-}
-
-// pub const MSG_CHOKE: u8 = 0;
-pub const MSG_UNCHOKE: u8 = 1;
-pub const MSG_INTERESTED: u8 = 2;
-// pub const MSG_NOT_INTERESTED: u8 = 3;
-// pub const MSG_HAVE: u8 = 4;
-pub const MSG_BITFIELD: u8 = 5;
-pub const MSG_REQUEST: u8 = 6;
-pub const MSG_PIECE: u8 = 7;
-// pub const MSG_CANCEL: u8 = 8;
-
-impl PeerMessage {
-    pub fn as_bytes(self: &Self) -> Vec<u8> {
-        let mut bytes: Vec<u8> = Vec::new();
-
-        bytes.extend(self.message_length.to_be_bytes());
-        bytes.push(self.message_id);
-        bytes.extend(&self.payload);
-
-        return bytes;
-    }
-
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
-        let message_id = bytes[0];
-        let payload: Vec<u8> = Vec::from(&bytes[1..bytes.len()]);
-
-        return Ok(PeerMessage {
-            message_length: bytes.len() as u32,
-            message_id,
-            payload,
-        });
-    }
-
-    pub fn interested() -> Self {
-        return PeerMessage {
-            message_length: 5,
-            message_id: MSG_INTERESTED,
-            payload: Vec::new(),
-        };
-    }
-
-    pub fn request(index: u32, begin: u32, length: u32) -> Self {
-        let mut payload: Vec<u8> = Vec::new();
-
-        payload.extend(index.to_be_bytes());
-        payload.extend(begin.to_be_bytes());
-        payload.extend(length.to_be_bytes());
-
-        return PeerMessage {
-            message_length: 5 + payload.len() as u32,
-            message_id: MSG_REQUEST,
-            payload: payload,
-        };
-    }
+    pub peer_id: [u8; 20],
+    pub peer_choking: bool,
+    pub am_interested: bool,
+    pub bitfield: Option<Bitfield>,
 }
 
 impl PeerConnection {
-    pub fn recv_message(&mut self) -> PeerMessage {
+    pub fn recv_message(&mut self) -> Result<PeerMessage, anyhow::Error> {
         // read the 4 byte length prefix
         let mut len_buf = [0u8; 4];
-        self.socket
-            .read_exact(&mut len_buf)
-            .expect("Failed reading length");
+        self.socket.read_exact(&mut len_buf)?;
         let len = u32::from_be_bytes(len_buf) as usize;
 
         if len == 0 {
             // keepalive message
+            return Ok(PeerMessage::KeepAlive);
         }
 
         // read exactly len bytes
         let mut buf = vec![0u8; len];
-        self.socket
-            .read_exact(&mut buf)
-            .expect("Failed reading message");
+        self.socket.read_exact(&mut buf)?;
 
-        // parse without the length prefix since we already consumed it
-        PeerMessage::from_bytes(&buf).expect("Failed parsing peer message")
+        return Ok(PeerMessage::try_from(buf.as_slice())?);
     }
 
     pub fn send_message(self: &mut Self, message: &PeerMessage) {
-        let bytes = message.as_bytes();
+        let bytes = message.to_wire();
 
         self.socket
             .write_all(&bytes)
             .expect("Failed writting message to socket");
     }
+
+    pub fn handle_one(&mut self) -> Result<PeerMessage, anyhow::Error> {
+        let msg = self.recv_message()?;
+
+        match &msg {
+            PeerMessage::Choke => self.peer_choking = true,
+            PeerMessage::Unchoke => self.peer_choking = false,
+            PeerMessage::Have(_i) => {
+                // todo
+            }
+            PeerMessage::Bitfield(b) => self.bitfield = Some(b.clone()),
+            PeerMessage::KeepAlive => {
+                // noop
+            }
+            _ => {}
+        }
+
+        Ok(msg)
+    }
 }
 
 impl Handshake {
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, anyhow::Error> {
         let protocol_length = usize::from(bytes[0]);
 
         if bytes.len() < 1 + protocol_length as usize {
-            return Err("Packet not large enough".to_string());
+            return Err(anyhow::Error::msg("invalid length"));
         }
 
-        let protocol =
-            str::from_utf8(&bytes[1..(1 + protocol_length)]).map_err(|e| e.to_string())?;
+        let protocol = str::from_utf8(&bytes[1..(1 + protocol_length)])?;
 
         let info_hash = &bytes[(1 + protocol_length + 8)..(1 + protocol_length + 8 + 20)];
         let peer_id = &bytes[(1 + protocol_length + 8 + 20)..(1 + protocol_length + 8 + 40)];
@@ -377,7 +335,10 @@ pub fn random_peer_id() -> Vec<u8> {
     return result;
 }
 
-pub fn connect_to_peer(torrent: &SingleTorrentManifest, peer: &String) -> PeerConnection {
+pub fn connect_to_peer(
+    torrent: &SingleTorrentManifest,
+    peer: &String,
+) -> Result<PeerConnection, anyhow::Error> {
     let info_hash_str = calculate_info_hash(&torrent);
     let info_hash_bytes = info_hash_as_bytes(&info_hash_str);
 
@@ -389,56 +350,42 @@ pub fn connect_to_peer(torrent: &SingleTorrentManifest, peer: &String) -> PeerCo
     };
     let handshake_bytes = handshake_out.to_bytes();
 
-    let peer_addr: SocketAddrV4 = peer.parse().expect("Invalid ipv4 address");
+    let peer_addr: SocketAddrV4 = peer.parse()?;
 
-    let mut stream = TcpStream::connect(&peer_addr).expect("Failed to open tcp stream to peer");
+    let mut stream = TcpStream::connect(&peer_addr)?;
 
     // write the handshake
-    stream
-        .write_all(&handshake_bytes)
-        .expect("Failed writing to peer");
+    stream.write_all(&handshake_bytes)?;
 
     // read the handshake
     let mut buf = [0u8; 1024];
-    let n = stream.read(&mut buf).expect("Failed reading tcp stream");
+    let n = stream.read(&mut buf)?;
     let received = &buf[..n];
 
-    let handshake_in = Handshake::from_bytes(received).expect("Failed to parse incoming handshake");
+    let handshake_in = Handshake::from_bytes(received)?;
 
-    return PeerConnection {
+    return Ok(PeerConnection {
         socket: stream,
-        handshake: handshake_in,
+        peer_id: handshake_in
+            .peer_id
+            .try_into()
+            .map_err(|v: Vec<u8>| anyhow!("expected 20-byte peer id, got {} bytes", v.len()))?,
         bitfield: None,
-    };
-}
-
-pub fn consume_bitfield(connection: &mut PeerConnection) {
-    if connection.bitfield.is_none() {
-        let bitfield_message = connection.recv_message();
-
-        if bitfield_message.message_id != MSG_BITFIELD {
-            println!("expected bitfield, found {}", bitfield_message.message_id);
-        }
-
-        connection.bitfield = Some(bitfield_message);
-    }
+        am_interested: false,
+        peer_choking: true,
+    });
 }
 
 pub fn download_piece(
     torrent: &SingleTorrentManifest,
     peer: &mut PeerConnection,
     index: u32,
-) -> Vec<u8> {
-    eprintln!("consuming bitfield");
-    consume_bitfield(peer);
+) -> Result<Vec<u8>, anyhow::Error> {
+    peer.send_message(&PeerMessage::Interested);
 
-    eprintln!("sending interested");
-    peer.send_message(&PeerMessage::interested());
-
-    let unchoke = peer.recv_message();
-    if unchoke.message_id != MSG_UNCHOKE {
-        eprintln!("Expected unchoke, got {}", unchoke.message_id);
-        return Vec::new();
+    // wait for peer to be ready
+    while peer.peer_choking {
+        peer.handle_one()?;
     }
 
     let piece_size = if index == (torrent.info.pieces.len() as u32 - 1) {
@@ -474,25 +421,33 @@ pub fn download_piece(
             i * chunk_size
         );
 
-        peer.send_message(&PeerMessage::request(
-            index,
-            i * chunk_size,
-            this_chunk_size,
-        ));
+        peer.send_message(&PeerMessage::Request {
+            index: index,
+            begin: i * chunk_size,
+            length: this_chunk_size,
+        });
 
-        let result = loop {
-            let msg = peer.recv_message();
-            if msg.message_id == MSG_PIECE {
-                break msg;
+        loop {
+            if peer.peer_choking {
+                return Err(anyhow!("Choking"));
             }
-            eprintln!("Ignoring message: {}", msg.message_id);
-        };
 
-        let block_data = result.payload[8..result.payload.len()].iter().clone();
-        chunk_buffer.extend(block_data);
+            let msg = peer.handle_one()?;
+
+            match &msg {
+                PeerMessage::Piece { block, .. } => {
+                    chunk_buffer.extend(block);
+
+                    break;
+                }
+                _ => {
+                    eprintln!("Ignoring message: {:?}", msg);
+                }
+            }
+        }
     }
 
-    return chunk_buffer;
+    return Ok(chunk_buffer);
 }
 
 #[cfg(test)]
