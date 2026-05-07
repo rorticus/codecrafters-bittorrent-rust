@@ -1,4 +1,4 @@
-use anyhow::anyhow;
+use anyhow::{Context, anyhow};
 use base64::{Engine, engine::general_purpose};
 use rand;
 use serde::{self, Deserialize};
@@ -28,6 +28,27 @@ pub struct TorrentInfo {
         serialize_with = "serialize_pieces"
     )]
     pub pieces: Vec<Vec<u8>>,
+}
+
+pub struct Torrent {
+    pub manifest: SingleTorrentManifest,
+    pub info_hash: [u8; 20],
+}
+
+impl Torrent {
+    pub fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
+        let manifest = parse_torrent(bytes)?;
+        let info_hash = calculate_info_hash(&manifest)?;
+
+        return Ok(Torrent {
+            manifest,
+            info_hash,
+        });
+    }
+
+    pub fn info_hash_hex(&self) -> String {
+        return hex::encode(self.info_hash);
+    }
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -66,8 +87,8 @@ pub struct Handshake {
     // peer id (20 bytes) (generate 20 random byte values)
     pub length: u8,
     pub protocol: String,
-    pub info_hash: Vec<u8>,
-    pub peer_id: Vec<u8>,
+    pub info_hash: [u8; 20],
+    pub peer_id: [u8; 20],
 }
 
 #[derive(Debug)]
@@ -98,12 +119,12 @@ impl PeerConnection {
         return Ok(PeerMessage::try_from(buf.as_slice())?);
     }
 
-    pub fn send_message(self: &mut Self, message: &PeerMessage) {
+    pub fn send_message(self: &mut Self, message: &PeerMessage) -> anyhow::Result<()> {
         let bytes = message.to_wire();
 
-        self.socket
-            .write_all(&bytes)
-            .expect("Failed writting message to socket");
+        self.socket.write_all(&bytes)?;
+
+        Ok(())
     }
 
     pub fn handle_one(&mut self) -> Result<PeerMessage, anyhow::Error> {
@@ -142,8 +163,8 @@ impl Handshake {
         Ok(Handshake {
             length: protocol_length as u8,
             protocol: protocol.to_string(),
-            info_hash: Vec::from(info_hash),
-            peer_id: Vec::from(peer_id),
+            info_hash: info_hash.try_into()?,
+            peer_id: peer_id.try_into()?,
         })
     }
 
@@ -160,15 +181,13 @@ impl Handshake {
     }
 }
 
-pub fn parse_torrent(bytes: &[u8]) -> Result<SingleTorrentManifest, Box<dyn std::error::Error>> {
+fn parse_torrent(bytes: &[u8]) -> anyhow::Result<SingleTorrentManifest> {
     let value = decode_bencoded_value(bytes)?;
 
     return Ok(serde_json::from_value(value)?);
 }
 
-pub fn serialize_torrent_info(
-    torrent: &SingleTorrentManifest,
-) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+fn serialize_torrent_info(torrent: &SingleTorrentManifest) -> anyhow::Result<Vec<u8>> {
     let as_value = serde_json::to_value(&torrent.info)?;
     return Ok(bencode_value(&as_value));
 }
@@ -230,15 +249,17 @@ where
 {
     let flat: Vec<u8> = peers
         .iter()
-        .map(|p| {
+        .map(|p| -> Result<Vec<u8>, D::Error> {
             let mut bytes: Vec<u8> = Vec::new();
-            let addr: Ipv4Addr = p.ip.parse().expect("Invalid IPv4 address");
+            let addr: Ipv4Addr = p.ip.parse().map_err(serde::ser::Error::custom)?;
 
             bytes.extend(addr.octets());
             bytes.extend(p.port.to_be_bytes());
 
-            return bytes;
+            Ok(bytes)
         })
+        .collect::<Result<Vec<_>, D::Error>>()?
+        .into_iter()
         .flatten()
         .collect();
 
@@ -246,84 +267,48 @@ where
     serializer.serialize_str(&encoded)
 }
 
-pub fn calculate_info_hash(
-    torrent: &SingleTorrentManifest,
-) -> Result<String, Box<dyn std::error::Error>> {
+fn calculate_info_hash(torrent: &SingleTorrentManifest) -> anyhow::Result<[u8; 20]> {
     let encoded_manifest = serialize_torrent_info(&torrent)?;
 
     let mut hasher = Sha1::new();
     hasher.update(encoded_manifest);
     let result = hasher.finalize();
-    let hex = format!("{:x}", result);
 
-    return Ok(hex);
+    return Ok(result.try_into()?);
 }
 
-pub fn info_hash_as_bytes(hash: &Result<String, Box<dyn std::error::Error>>) -> Vec<u8> {
-    let info_hash: Vec<u8> = match hash {
-        Ok(v) => (0..v.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&v[i..i + 2], 16).unwrap())
-            .collect(),
-        Err(_) => return Vec::new(),
-    };
-
-    return info_hash;
-}
-
-pub fn get_peers(torrent: &SingleTorrentManifest) -> Vec<AnnounceResponsePeer> {
-    let hash_str = calculate_info_hash(torrent);
-    let info_hash: Vec<u8> = info_hash_as_bytes(&hash_str);
-
+pub fn get_peers(torrent: &Torrent) -> anyhow::Result<Vec<AnnounceResponsePeer>> {
     let client = reqwest::blocking::Client::new();
 
-    let mut url = Url::parse(&torrent.announce).expect("bad url parsing");
+    let mut url = Url::parse(&torrent.manifest.announce).context("bad url parsing")?;
     url.query_pairs_mut()
         .append_pair("peer_id", "12345678901234567890")
         .append_pair("port", "6881")
         .append_pair("uploaded", "0")
         .append_pair("downloaded", "0")
-        .append_pair("left", &format!("{}", torrent.info.length))
+        .append_pair("left", &format!("{}", torrent.manifest.info.length))
         .append_pair("compact", "1");
 
-    let response = match client
+    let response = client
         .get(format!(
             "{}?{}&info_hash={}",
-            &torrent.announce,
+            &torrent.manifest.announce,
             url.query().unwrap_or(""),
-            urlencoding::encode_binary(&info_hash)
+            urlencoding::encode_binary(&torrent.info_hash)
         ))
-        .send()
-    {
-        Ok(v) => v,
-        Err(_) => return Vec::new(),
-    };
+        .send()?;
 
-    let response_bytes = match response.bytes() {
-        Ok(b) => b,
-        Err(_) => return Vec::new(),
-    };
+    let response_bytes = response.bytes()?;
 
-    let decoded = match decode_bencoded_value(&response_bytes) {
-        Ok(b) => b,
-        Err(_) => {
-            eprintln!("error decoding response");
-            return Vec::new();
-        }
-    };
+    let decoded = decode_bencoded_value(&response_bytes).context("error decoding response")?;
 
-    let response: AnnounceResponse = match serde_json::from_value(decoded) {
-        Ok(p) => p,
-        Err(_) => {
-            eprintln!("Error parsing response");
-            return Vec::new();
-        }
-    };
+    let response: AnnounceResponse =
+        serde_json::from_value(decoded).context("error parsing response")?;
 
-    return response.peers;
+    return Ok(response.peers);
 }
 
-pub fn random_peer_id() -> Vec<u8> {
+pub fn random_peer_id() -> [u8; 20] {
     let result: Vec<u8> = (0..20)
         .into_iter()
         .map(|_| {
@@ -332,20 +317,16 @@ pub fn random_peer_id() -> Vec<u8> {
         })
         .collect();
 
-    return result;
+    return result
+        .try_into()
+        .expect("random_peer_id collected exactly 20 bytes");
 }
 
-pub fn connect_to_peer(
-    torrent: &SingleTorrentManifest,
-    peer: &String,
-) -> Result<PeerConnection, anyhow::Error> {
-    let info_hash_str = calculate_info_hash(&torrent);
-    let info_hash_bytes = info_hash_as_bytes(&info_hash_str);
-
+pub fn connect_to_peer(torrent: &Torrent, peer: &str) -> anyhow::Result<PeerConnection> {
     let handshake_out = Handshake {
         length: 19,
         protocol: "BitTorrent protocol".to_string(),
-        info_hash: info_hash_bytes,
+        info_hash: torrent.info_hash,
         peer_id: random_peer_id(),
     };
     let handshake_bytes = handshake_out.to_bytes();
@@ -366,10 +347,7 @@ pub fn connect_to_peer(
 
     return Ok(PeerConnection {
         socket: stream,
-        peer_id: handshake_in
-            .peer_id
-            .try_into()
-            .map_err(|v: Vec<u8>| anyhow!("expected 20-byte peer id, got {} bytes", v.len()))?,
+        peer_id: handshake_in.peer_id,
         bitfield: None,
         am_interested: false,
         peer_choking: true,
@@ -377,27 +355,28 @@ pub fn connect_to_peer(
 }
 
 pub fn download_piece(
-    torrent: &SingleTorrentManifest,
+    torrent: &Torrent,
     peer: &mut PeerConnection,
     index: u32,
-) -> Result<Vec<u8>, anyhow::Error> {
-    peer.send_message(&PeerMessage::Interested);
+) -> anyhow::Result<Vec<u8>> {
+    peer.send_message(&PeerMessage::Interested)?;
 
     // wait for peer to be ready
     while peer.peer_choking {
         peer.handle_one()?;
     }
 
-    let piece_size = if index == (torrent.info.pieces.len() as u32 - 1) {
+    let piece_size = if index == (torrent.manifest.info.pieces.len() as u32 - 1) {
         // last piece may be smaller
-        let remainder = torrent.info.length as u32 % torrent.info.piece_length as u32;
+        let remainder =
+            torrent.manifest.info.length as u32 % torrent.manifest.info.piece_length as u32;
         if remainder == 0 {
-            torrent.info.piece_length as u32
+            torrent.manifest.info.piece_length as u32
         } else {
             remainder
         }
     } else {
-        torrent.info.piece_length as u32
+        torrent.manifest.info.piece_length as u32
     };
 
     let chunk_size: u32 = 16 * 1024;
@@ -425,7 +404,7 @@ pub fn download_piece(
             index: index,
             begin: i * chunk_size,
             length: this_chunk_size,
-        });
+        })?;
 
         loop {
             if peer.peer_choking {

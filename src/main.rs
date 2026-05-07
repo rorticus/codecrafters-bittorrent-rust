@@ -4,9 +4,8 @@ use std::sync::Mutex;
 use std::sync::mpsc;
 use std::thread;
 
-use crate::torrent::{
-    calculate_info_hash, connect_to_peer, download_piece, get_peers, parse_torrent,
-};
+use crate::torrent::Torrent;
+use crate::torrent::{connect_to_peer, download_piece, get_peers};
 
 mod bencode;
 mod peer;
@@ -52,7 +51,7 @@ enum Command {
     },
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     match args.command {
@@ -66,86 +65,61 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::Info { filename } => {
             // read the file
             let bytes = std::fs::read(&filename)?;
+            let torrent = Torrent::from_bytes(&bytes)?;
 
-            match parse_torrent(&bytes) {
-                Ok(manifest) => {
-                    let hex = calculate_info_hash(&manifest)?;
-
-                    println!("{:?}", bytes);
-
-                    println!("Tracker URL: {}", manifest.announce);
-                    println!("Length: {}", manifest.info.length);
-                    println!("Info Hash: {}", hex);
-                    println!("Piece Length: {}", manifest.info.piece_length);
-                    println!("Piece Hashes:");
-                    for hash in manifest.info.pieces {
-                        let hex: String = hash.iter().map(|b| format!("{:02x}", b)).collect();
-                        println!("{}", hex);
-                    }
-                }
-                Err(e) => {
-                    println!("Unable to parse {}, {}", filename, e);
-                    println!("{:?}", bytes);
-                }
+            println!("Tracker URL: {}", torrent.manifest.announce);
+            println!("Length: {}", torrent.manifest.info.length);
+            println!("Info Hash: {}", torrent.info_hash_hex());
+            println!("Piece Length: {}", torrent.manifest.info.piece_length);
+            println!("Piece Hashes:");
+            for hash in torrent.manifest.info.pieces {
+                println!("{}", hex::encode(hash));
             }
         }
         Command::Peers { filename } => {
             let bytes = std::fs::read(&filename)?;
 
-            match parse_torrent(&bytes) {
-                Ok(manifest) => {
-                    let peers = get_peers(&manifest);
+            let torrent = Torrent::from_bytes(&bytes)?;
+            let peers = get_peers(&torrent)?;
 
-                    for peer in peers {
-                        println!("{}:{}", peer.ip, peer.port);
-                    }
-                }
-                Err(e) => {
-                    println!("Unable to parse {}, {}", filename, e);
-                    println!("{:?}", bytes);
-                }
+            for peer in peers {
+                println!("{}:{}", peer.ip, peer.port);
             }
         }
         Command::Handshake { filename, peer } => {
-            let torrent_bytes = std::fs::read(filename).expect("Error reading torrent file");
-            let manifest = parse_torrent(&torrent_bytes).expect("Error parsing torrent");
+            let torrent_bytes = std::fs::read(filename)?;
 
-            let result = connect_to_peer(&manifest, &peer)?;
+            let torrent = Torrent::from_bytes(&torrent_bytes)?;
+            let result = connect_to_peer(&torrent, &peer)?;
 
-            let peer_id_str: String = result
-                .peer_id
-                .iter()
-                .map(|b| format!("{:02x}", b))
-                .collect();
-
-            println!("Peer ID: {}", peer_id_str);
+            println!("Peer ID: {}", hex::encode(result.peer_id));
         }
         Command::DownloadPiece {
             output,
             filename,
             piece_index,
         } => {
-            let torrent_bytes = std::fs::read(filename).expect("Error reading torrent file");
-            let manifest = parse_torrent(&torrent_bytes).expect("Error parsing torrent");
+            let torrent_bytes = std::fs::read(filename)?;
+            let torrent = Torrent::from_bytes(&torrent_bytes)?;
 
-            let peers = get_peers(&manifest);
-            if peers.len() == 0 {
+            let peers = get_peers(&torrent)?;
+            if peers.is_empty() {
                 eprintln!("no peers found");
             } else {
                 let mut result =
-                    connect_to_peer(&manifest, &format!("{}:{}", peers[0].ip, peers[0].port))?;
+                    connect_to_peer(&torrent, &format!("{}:{}", peers[0].ip, peers[0].port))?;
 
-                let piece = download_piece(&manifest, &mut result, piece_index)?;
+                let piece = download_piece(&torrent, &mut result, piece_index)?;
 
                 std::fs::write(output, &piece)?;
             }
         }
         Command::Download { output, filename } => {
-            let torrent_bytes = std::fs::read(filename).expect("Error reading torrent file");
-            let manifest = Arc::new(parse_torrent(&torrent_bytes).expect("Error parsing torrent"));
+            let torrent_bytes = std::fs::read(filename)?;
+            let torrent = Arc::new(Torrent::from_bytes(&torrent_bytes)?);
 
-            let peers = get_peers(&manifest);
-            if peers.len() == 0 {
+            let peers = get_peers(&torrent)?;
+            if peers.is_empty() {
                 eprintln!("no peers found");
             } else {
                 let (tx, rx) = mpsc::channel::<Job>();
@@ -154,20 +128,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let arc_rx = Arc::new(Mutex::new(rx));
 
                 let num_threads = 5;
-                let num_pieces = manifest.info.pieces.len();
+                let num_pieces = torrent.manifest.info.pieces.len();
                 let mut handles = vec![];
 
                 for _ in 0..num_threads {
                     let rx = Arc::clone(&arc_rx);
-                    let manifest = Arc::clone(&manifest);
+                    let torrent = Arc::clone(&torrent);
                     let result_tx = result_tx.clone();
 
                     let handle = thread::spawn(move || -> anyhow::Result<()> {
                         loop {
                             match rx.lock().unwrap().recv().unwrap() {
                                 Job::DownloadPiece { index, peer } => {
-                                    let mut connection = connect_to_peer(&manifest, &peer)?;
-                                    let data = download_piece(&manifest, &mut connection, index)?;
+                                    let mut connection = connect_to_peer(&torrent, &peer)?;
+                                    let data = download_piece(&torrent, &mut connection, index)?;
                                     result_tx.send((index, data)).unwrap();
                                 }
                                 Job::Shutdown => break,
@@ -179,7 +153,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     handles.push(handle);
                 }
 
-                for piece_index in 0..manifest.info.pieces.len() {
+                for piece_index in 0..torrent.manifest.info.pieces.len() {
                     // pick a random peer
                     let peer_index = rand::random_range(0..peers.len());
 
