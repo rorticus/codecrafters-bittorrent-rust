@@ -1,13 +1,11 @@
-use clap::{Parser, Subcommand};
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::mpsc;
-use std::thread;
-
 use crate::torrent::Torrent;
 use crate::torrent::{connect_to_peer, download_piece, get_peers};
+use clap::{Parser, Subcommand};
+use std::path::Path;
+use std::sync::Arc;
 
 mod bencode;
+mod download;
 mod peer;
 mod torrent;
 
@@ -115,72 +113,10 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Command::Download { output, filename } => {
-            let torrent_bytes = std::fs::read(filename)?;
-            let torrent = Arc::new(Torrent::from_bytes(&torrent_bytes)?);
-
+            let bytes = std::fs::read(filename)?;
+            let torrent = Arc::new(Torrent::from_bytes(&bytes)?);
             let peers = get_peers(&torrent)?;
-            if peers.is_empty() {
-                eprintln!("no peers found");
-            } else {
-                let (tx, rx) = mpsc::channel::<Job>();
-                let (result_tx, result_rx) = mpsc::channel::<(u32, Vec<u8>)>();
-
-                let arc_rx = Arc::new(Mutex::new(rx));
-
-                let num_threads = 5;
-                let num_pieces = torrent.manifest.info.pieces.len();
-                let mut handles = vec![];
-
-                for _ in 0..num_threads {
-                    let rx = Arc::clone(&arc_rx);
-                    let torrent = Arc::clone(&torrent);
-                    let result_tx = result_tx.clone();
-
-                    let handle = thread::spawn(move || -> anyhow::Result<()> {
-                        loop {
-                            match rx.lock().unwrap().recv().unwrap() {
-                                Job::DownloadPiece { index, peer } => {
-                                    let mut connection = connect_to_peer(&torrent, &peer)?;
-                                    let data = download_piece(&torrent, &mut connection, index)?;
-                                    result_tx.send((index, data)).unwrap();
-                                }
-                                Job::Shutdown => break,
-                            }
-                        }
-
-                        Ok(())
-                    });
-                    handles.push(handle);
-                }
-
-                for piece_index in 0..torrent.manifest.info.pieces.len() {
-                    // pick a random peer
-                    let peer_index = rand::random_range(0..peers.len());
-
-                    tx.send(Job::DownloadPiece {
-                        index: piece_index as u32,
-                        peer: peers[peer_index].to_str(),
-                    })
-                    .unwrap();
-                }
-
-                for _ in 0..num_threads {
-                    tx.send(Job::Shutdown).unwrap();
-                }
-
-                let mut results = vec![vec![]; num_pieces];
-                for _ in 0..num_pieces {
-                    let (index, data) = result_rx.recv().unwrap();
-                    results[index as usize] = data;
-                }
-
-                for handle in handles {
-                    handle.join().unwrap()?;
-                }
-
-                let file_data: Vec<u8> = results.into_iter().flatten().collect();
-                std::fs::write(output, &file_data)?;
-            }
+            download::download_torrent(&torrent, &peers, Path::new(&output))?;
         }
     }
 

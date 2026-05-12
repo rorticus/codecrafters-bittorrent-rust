@@ -30,6 +30,7 @@ pub struct TorrentInfo {
     pub pieces: Vec<Vec<u8>>,
 }
 
+#[derive(Debug)]
 pub struct Torrent {
     pub manifest: SingleTorrentManifest,
     pub info_hash: [u8; 20],
@@ -56,7 +57,7 @@ pub struct SingleTorrentManifest {
     pub announce: String,
     pub info: TorrentInfo,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AnnounceResponsePeer {
     pub ip: String,
     pub port: u16,
