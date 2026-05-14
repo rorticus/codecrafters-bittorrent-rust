@@ -20,12 +20,6 @@ pub struct Worker {
 }
 
 impl Worker {
-    // fn unchoke(&mut self) -> anyhow::Result<()> {
-    //     self.conn.send_message(&PeerMessage::Unchoke)?;
-
-    //     return Ok(());
-    // }
-
     fn prepare(&mut self) -> anyhow::Result<()> {
         self.conn.send_message(&PeerMessage::Interested)?;
 
@@ -34,12 +28,15 @@ impl Worker {
             self.conn.handle_one()?;
         }
 
-        return Ok(());
+        Ok(())
     }
 
     fn next_piece(&self) -> Option<u32> {
+        let bitfield = self.conn.bitfield.as_ref()?;
         let mut q = self.queue.lock().unwrap();
-        return q.pop_front();
+
+        let pos = q.iter().position(|&idx| bitfield.has_piece(idx))?;
+        Some(q.remove(pos).expect("position returned valid index"))
     }
 
     fn download_piece(&mut self, idx: u32) -> anyhow::Result<Vec<u8>> {
@@ -103,7 +100,7 @@ impl Worker {
             }
         }
 
-        return Ok(chunk_buffer);
+        Ok(chunk_buffer)
     }
 
     pub fn new(
@@ -114,12 +111,12 @@ impl Worker {
     ) -> anyhow::Result<Self> {
         let conn = connect_to_peer(&torrent, &peer.to_str())?;
 
-        return Ok(Worker {
+        Ok(Worker {
             torrent,
             conn,
             queue,
             results,
-        });
+        })
     }
 
     fn requeue(&self, idx: u32) {
@@ -130,18 +127,25 @@ impl Worker {
         self.prepare()?;
 
         loop {
-            let idx = match self.next_piece() {
-                Some(i) => i,
-                None => return Ok(()),
-            };
-
-            match self.download_piece(idx) {
-                Ok(bytes) => self.results.send((idx, bytes))?,
-                Err(e) => {
-                    self.requeue(idx);
-                    return Err(e);
+            match self.next_piece() {
+                Some(i) => match self.download_piece(i) {
+                    Ok(bytes) => self.results.send((i, bytes))?,
+                    Err(e) => {
+                        self.requeue(i);
+                        return Err(e);
+                    }
+                },
+                None => {
+                    let is_empty = self.queue.lock().unwrap().is_empty();
+                    if is_empty {
+                        // queue is legit empty, we ae done here
+                        return Ok(());
+                    } else {
+                        // no pieces left for our peer. wait a sec?
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
                 }
-            }
+            };
         }
     }
 }
@@ -192,5 +196,5 @@ pub fn download_torrent(
     let file_data: Vec<u8> = pieces.into_iter().flatten().collect();
     std::fs::write(path, file_data)?;
 
-    return Ok(());
+    Ok(())
 }
