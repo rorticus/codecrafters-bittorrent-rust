@@ -1,5 +1,5 @@
 use crate::torrent::Torrent;
-use crate::torrent::{connect_to_peer, download_piece, get_peers};
+use crate::torrent::{connect_to_peer, get_peers};
 use clap::{Parser, Subcommand};
 use std::path::Path;
 use std::sync::Arc;
@@ -107,7 +107,8 @@ fn main() -> anyhow::Result<()> {
                 let mut result =
                     connect_to_peer(&torrent, &format!("{}:{}", peers[0].ip, peers[0].port))?;
 
-                let piece = download_piece(&torrent, &mut result, piece_index)?;
+                download::prepare(&mut result)?;
+                let piece = download::download_piece(&torrent, &mut result, piece_index)?;
 
                 std::fs::write(output, &piece)?;
             }
