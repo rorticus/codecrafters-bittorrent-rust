@@ -7,9 +7,10 @@ use std::sync::Mutex;
 use std::sync::mpsc;
 use std::thread;
 
+use crate::peer::PeerConnection;
 use crate::peer::PeerMessage;
-use crate::torrent::connect_to_peer;
-use crate::torrent::{AnnounceResponsePeer, PeerConnection, Torrent};
+use crate::torrent::Torrent;
+use crate::tracker::AnnounceResponsePeer;
 
 #[derive(Debug)]
 pub struct Worker {
@@ -42,7 +43,7 @@ impl Worker {
         queue: Arc<Mutex<VecDeque<u32>>>,
         results: mpsc::Sender<(u32, Vec<u8>)>,
     ) -> anyhow::Result<Self> {
-        let conn = connect_to_peer(&torrent, &peer.to_str())?;
+        let conn = PeerConnection::connect(torrent.info_hash, &peer.to_str())?;
 
         Ok(Worker {
             torrent,

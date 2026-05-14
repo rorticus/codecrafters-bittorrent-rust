@@ -1,18 +1,15 @@
-use crate::torrent::Torrent;
-use crate::torrent::{connect_to_peer, get_peers};
-use clap::{Parser, Subcommand};
-use std::path::Path;
-use std::sync::Arc;
-
 mod bencode;
 mod download;
 mod peer;
 mod torrent;
+mod tracker;
 
-enum Job {
-    DownloadPiece { index: u32, peer: String },
-    Shutdown,
-}
+use crate::peer::PeerConnection;
+use crate::torrent::Torrent;
+use crate::tracker::get_peers;
+use clap::{Parser, Subcommand};
+use std::path::Path;
+use std::sync::Arc;
 
 #[derive(Parser)]
 struct Args {
@@ -88,7 +85,7 @@ fn main() -> anyhow::Result<()> {
             let torrent_bytes = std::fs::read(filename)?;
 
             let torrent = Torrent::from_bytes(&torrent_bytes)?;
-            let result = connect_to_peer(&torrent, &peer)?;
+            let result = PeerConnection::connect(torrent.info_hash, &peer)?;
 
             println!("Peer ID: {}", hex::encode(result.peer_id));
         }
@@ -104,8 +101,7 @@ fn main() -> anyhow::Result<()> {
             if peers.is_empty() {
                 eprintln!("no peers found");
             } else {
-                let mut result =
-                    connect_to_peer(&torrent, &format!("{}:{}", peers[0].ip, peers[0].port))?;
+                let mut result = PeerConnection::connect(torrent.info_hash, &peers[0].to_str())?;
 
                 download::prepare(&mut result)?;
                 let piece = download::download_piece(&torrent, &mut result, piece_index)?;
