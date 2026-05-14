@@ -42,11 +42,9 @@ impl PeerConnection {
         stream.write_all(&handshake_bytes)?;
 
         // read the handshake
-        let mut buf = [0u8; 1024];
-        let n = stream.read(&mut buf)?;
-        let received = &buf[..n];
-
-        let handshake_in = Handshake::from_bytes(received)?;
+        let mut buf = [0u8; 68];
+        stream.read_exact(&mut buf)?;
+        let handshake_in = Handshake::from_bytes(&buf)?;
 
         return Ok(PeerConnection {
             socket: stream,
