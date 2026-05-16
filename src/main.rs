@@ -1,9 +1,11 @@
 mod bencode;
 mod download;
+mod magnet;
 mod peer;
 mod torrent;
 mod tracker;
 
+use crate::magnet::parse_magnet_link;
 use crate::peer::PeerConnection;
 use crate::torrent::Torrent;
 use crate::tracker::get_peers;
@@ -43,6 +45,9 @@ enum Command {
         #[arg(short = 'o')]
         output: String,
         filename: String,
+    },
+    MagnetParse {
+        magnet_link: String,
     },
 }
 
@@ -114,6 +119,12 @@ fn main() -> anyhow::Result<()> {
             let torrent = Arc::new(Torrent::from_bytes(&bytes)?);
             let peers = get_peers(&torrent)?;
             download::download_torrent(&torrent, &peers, Path::new(&output))?;
+        }
+        Command::MagnetParse { magnet_link } => {
+            let link = parse_magnet_link(magnet_link)?;
+
+            println!("Tracker URL: {}", link.tracker_url);
+            println!("Info Hash: {}", link.info_hash);
         }
     }
 
