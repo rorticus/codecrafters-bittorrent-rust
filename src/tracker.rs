@@ -55,9 +55,8 @@ fn announce(
         .send()?;
 
     let url_str = format!(
-        "{}?{}&info_hash={}",
-        &url,
-        url.query().unwrap_or(""),
+        "{}&info_hash={}",
+        &url.as_str(),
         urlencoding::encode_binary(info_hash)
     );
     eprintln!("GET {}", url_str);
@@ -84,8 +83,6 @@ pub fn get_peers(torrent: &Torrent) -> anyhow::Result<Vec<AnnounceResponsePeer>>
 pub fn get_peers_from_magnet(
     magnet_link: &MagnetLink,
 ) -> anyhow::Result<Vec<AnnounceResponsePeer>> {
-    eprintln!("tracker_url: {:?}", magnet_link.tracker_url);
-
     return announce(&magnet_link.tracker_url, &magnet_link.info_hash, 1);
 }
 
