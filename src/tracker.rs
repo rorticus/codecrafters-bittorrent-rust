@@ -54,7 +54,16 @@ fn announce(
         ))
         .send()?;
 
+    let url_str = format!(
+        "{}?{}&info_hash={}",
+        &url,
+        url.query().unwrap_or(""),
+        urlencoding::encode_binary(info_hash)
+    );
+    eprintln!("GET {}", url_str);
+
     let response_bytes = response.bytes()?;
+    eprintln!("response: {:?}", String::from_utf8_lossy(&response_bytes));
 
     let decoded = decode_bencoded_value(&response_bytes).context("error decoding response")?;
 
