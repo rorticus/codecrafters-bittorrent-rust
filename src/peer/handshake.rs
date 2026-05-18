@@ -37,7 +37,7 @@ impl Handshake {
 
         bytes.push(self.length);
         bytes.extend(self.protocol.as_bytes());
-        bytes.extend([0, 0, 0, 0, 0, 0, 0, 0]);
+        bytes.extend([0, 0, 0, 0, 0, 0x10, 0, 0]);
         bytes.extend(&self.info_hash);
         bytes.extend(&self.peer_id);
 

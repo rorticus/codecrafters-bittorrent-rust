@@ -8,7 +8,7 @@ mod tracker;
 use crate::magnet::parse_magnet_link;
 use crate::peer::PeerConnection;
 use crate::torrent::Torrent;
-use crate::tracker::get_peers;
+use crate::tracker::{get_peers, get_peers_from_magnet};
 use clap::{Parser, Subcommand};
 use std::path::Path;
 use std::sync::Arc;
@@ -47,6 +47,9 @@ enum Command {
         filename: String,
     },
     MagnetParse {
+        magnet_link: String,
+    },
+    MagnetHandshake {
         magnet_link: String,
     },
 }
@@ -124,7 +127,20 @@ fn main() -> anyhow::Result<()> {
             let link = parse_magnet_link(magnet_link)?;
 
             println!("Tracker URL: {}", link.tracker_url);
-            println!("Info Hash: {}", link.info_hash);
+            println!("Info Hash: {}", hex::encode(link.info_hash));
+        }
+        Command::MagnetHandshake { magnet_link } => {
+            let link = parse_magnet_link(magnet_link)?;
+
+            let peers = get_peers_from_magnet(&link)?;
+
+            if peers.is_empty() {
+                println!("No peers found.")
+            } else {
+                let peer = PeerConnection::connect(link.info_hash, &peers[0].to_str())?;
+
+                println!("Peer ID: {}", hex::encode(peer.peer_id));
+            }
         }
     }
 

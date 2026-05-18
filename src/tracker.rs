@@ -1,5 +1,5 @@
-use crate::Torrent;
 use crate::bencode::decode_bencoded_value;
+use crate::{Torrent, magnet::MagnetLink};
 use anyhow::Context;
 use base64::{Engine, engine::general_purpose};
 use serde::{self, Deserialize};
@@ -29,24 +29,28 @@ pub struct AnnounceResponse {
     pub peers: Vec<AnnounceResponsePeer>,
 }
 
-pub fn get_peers(torrent: &Torrent) -> anyhow::Result<Vec<AnnounceResponsePeer>> {
+fn announce(
+    url: &str,
+    info_hash: &[u8; 20],
+    left: i64,
+) -> anyhow::Result<Vec<AnnounceResponsePeer>> {
     let client = reqwest::blocking::Client::new();
 
-    let mut url = Url::parse(&torrent.manifest.announce).context("bad url parsing")?;
+    let mut url = Url::parse(&url).context("bad url parsing")?;
     url.query_pairs_mut()
         .append_pair("peer_id", "12345678901234567890")
         .append_pair("port", "6881")
         .append_pair("uploaded", "0")
         .append_pair("downloaded", "0")
-        .append_pair("left", &format!("{}", torrent.manifest.info.length))
+        .append_pair("left", &format!("{}", left))
         .append_pair("compact", "1");
 
     let response = client
         .get(format!(
             "{}?{}&info_hash={}",
-            &torrent.manifest.announce,
+            &url,
             url.query().unwrap_or(""),
-            urlencoding::encode_binary(&torrent.info_hash)
+            urlencoding::encode_binary(info_hash)
         ))
         .send()?;
 
@@ -58,6 +62,20 @@ pub fn get_peers(torrent: &Torrent) -> anyhow::Result<Vec<AnnounceResponsePeer>>
         serde_json::from_value(decoded).context("error parsing response")?;
 
     return Ok(response.peers);
+}
+
+pub fn get_peers(torrent: &Torrent) -> anyhow::Result<Vec<AnnounceResponsePeer>> {
+    return announce(
+        &torrent.manifest.announce,
+        &torrent.info_hash,
+        torrent.manifest.info.length,
+    );
+}
+
+pub fn get_peers_from_magnet(
+    magnet_link: &MagnetLink,
+) -> anyhow::Result<Vec<AnnounceResponsePeer>> {
+    return announce(&magnet_link.tracker_url, &magnet_link.info_hash, 1);
 }
 
 fn deserialize_peers<'de, D>(deserializer: D) -> Result<Vec<AnnounceResponsePeer>, D::Error>
