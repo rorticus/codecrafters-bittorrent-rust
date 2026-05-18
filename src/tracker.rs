@@ -47,23 +47,13 @@ fn announce(
 
     let response = client
         .get(format!(
-            "{}?{}&info_hash={}",
-            &url,
-            url.query().unwrap_or(""),
+            "{}&info_hash={}",
+            &url.as_str(),
             urlencoding::encode_binary(info_hash)
         ))
         .send()?;
 
-    let url_str = format!(
-        "{}&info_hash={}",
-        &url.as_str(),
-        urlencoding::encode_binary(info_hash)
-    );
-    eprintln!("GET {}", url_str);
-
     let response_bytes = response.bytes()?;
-    eprintln!("response: {:?}", String::from_utf8_lossy(&response_bytes));
-
     let decoded = decode_bencoded_value(&response_bytes).context("error decoding response")?;
 
     let response: AnnounceResponse =
