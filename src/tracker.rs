@@ -84,6 +84,8 @@ pub fn get_peers(torrent: &Torrent) -> anyhow::Result<Vec<AnnounceResponsePeer>>
 pub fn get_peers_from_magnet(
     magnet_link: &MagnetLink,
 ) -> anyhow::Result<Vec<AnnounceResponsePeer>> {
+    eprintln!("tracker_url: {:?}", magnet_link.tracker_url);
+
     return announce(&magnet_link.tracker_url, &magnet_link.info_hash, 1);
 }
 
