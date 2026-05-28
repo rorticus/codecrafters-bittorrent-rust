@@ -139,9 +139,10 @@ fn main() -> anyhow::Result<()> {
             } else {
                 let mut peer = PeerConnection::connect(link.info_hash, &peers[0].to_str())?;
 
-                peer.negotiate_extensions()?;
+                let extensions = peer.negotiate_extensions()?;
 
                 println!("Peer ID: {}", hex::encode(peer.peer_id));
+                println!("Peer Metadata Extension ID: {}", extensions["ut_metadata"]);
             }
         }
     }
