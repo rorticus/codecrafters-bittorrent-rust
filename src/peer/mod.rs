@@ -6,6 +6,7 @@ pub use bitfield::Bitfield;
 pub use handshake::Handshake;
 pub use message::PeerMessage;
 
+use std::collections::HashMap;
 use std::io::Read;
 use std::io::Write;
 use std::net::SocketAddrV4;
@@ -31,6 +32,7 @@ impl PeerConnection {
             protocol: "BitTorrent protocol".to_string(),
             info_hash,
             peer_id: random_peer_id(),
+            supports_extensions: true,
         };
         let handshake_bytes = handshake_out.to_bytes();
 
@@ -98,5 +100,21 @@ impl PeerConnection {
         }
 
         Ok(msg)
+    }
+
+    pub fn negotiate_extensions(&mut self) -> anyhow::Result<HashMap<String, u8>> {
+        self.send_message(&PeerMessage::ExtensionHandshake(HashMap::from([(
+            "ut_metadata".to_string(),
+            16,
+        )])))?;
+
+        loop {
+            let msg = self.handle_one()?;
+
+            match msg {
+                PeerMessage::ExtensionHandshake(extensions) => return Ok(extensions),
+                _ => {}
+            }
+        }
     }
 }

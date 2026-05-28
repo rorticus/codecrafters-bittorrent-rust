@@ -7,8 +7,16 @@ pub const MSG_BITFIELD: u8 = 5;
 pub const MSG_REQUEST: u8 = 6;
 pub const MSG_PIECE: u8 = 7;
 pub const MSG_CANCEL: u8 = 8;
+pub const MSG_EXTENDED: u8 = 20;
 
-use crate::peer::bitfield::Bitfield;
+use std::collections::HashMap;
+
+use anyhow::anyhow;
+
+use crate::{
+    bencode::{bencode_value, decode_bencoded_value},
+    peer::bitfield::Bitfield,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum MessageParseError {
@@ -17,6 +25,9 @@ pub enum MessageParseError {
 
     #[error("invalid message id {0}")]
     InvalidMessageId(u8),
+
+    #[error("invalid extensions packet id, expected 0 received {0}")]
+    InvalidExtensions(u8),
 }
 
 #[derive(Debug)]
@@ -43,6 +54,7 @@ pub enum PeerMessage {
         begin: u32,
         length: u32,
     },
+    ExtensionHandshake(HashMap<String, u8>),
 }
 
 impl TryFrom<&[u8]> for PeerMessage {
@@ -126,6 +138,20 @@ impl TryFrom<&[u8]> for PeerMessage {
                     length,
                 });
             }
+            MSG_EXTENDED => {
+                if payload[0] == 0 {
+                    // extension handshake
+                    let extensions = decode_bencoded_value(&payload[1..])
+                        .map_err(|_| MessageParseError::InvalidExtensions(payload[0]))?;
+                    let values: HashMap<String, u8> =
+                        serde_json::from_value(extensions["m"].clone())
+                            .map_err(|_| MessageParseError::InvalidExtensions(payload[0]))?;
+
+                    return Ok(PeerMessage::ExtensionHandshake(values));
+                } else {
+                    return Err(MessageParseError::InvalidExtensions(payload[0]));
+                }
+            }
             _ => Err(MessageParseError::InvalidMessageId(message_id)),
         }
     }
@@ -169,6 +195,26 @@ impl PeerMessage {
                 bytes.extend(length.to_be_bytes());
 
                 return PeerMessage::frame(MSG_REQUEST, &bytes);
+            }
+            PeerMessage::ExtensionHandshake(extensions) => {
+                let mut bytes: Vec<u8> = Vec::new();
+                // handshake id
+                bytes.push(0);
+
+                let supported_extensions: serde_json::Map<String, serde_json::Value> = extensions
+                    .iter()
+                    .map(|(k, v)| (k.clone(), serde_json::Value::from(*v)))
+                    .collect();
+
+                let mut payload = serde_json::Map::new();
+                payload.insert(
+                    "m".to_string(),
+                    serde_json::Value::Object(supported_extensions),
+                );
+
+                bytes.extend(bencode_value(&serde_json::Value::Object(payload)));
+
+                return PeerMessage::frame(MSG_EXTENDED, &bytes);
             }
             _ => {
                 eprintln!("Couldn't convert {:?} to bytes", self);

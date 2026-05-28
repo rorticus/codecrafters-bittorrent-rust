@@ -137,7 +137,9 @@ fn main() -> anyhow::Result<()> {
             if peers.is_empty() {
                 println!("No peers found.")
             } else {
-                let peer = PeerConnection::connect(link.info_hash, &peers[0].to_str())?;
+                let mut peer = PeerConnection::connect(link.info_hash, &peers[0].to_str())?;
+
+                peer.negotiate_extensions()?;
 
                 println!("Peer ID: {}", hex::encode(peer.peer_id));
             }

@@ -9,6 +9,7 @@ pub struct Handshake {
     pub protocol: String,
     pub info_hash: [u8; 20],
     pub peer_id: [u8; 20],
+    pub supports_extensions: bool,
 }
 
 impl Handshake {
@@ -20,6 +21,7 @@ impl Handshake {
         }
 
         let protocol = str::from_utf8(&bytes[1..(1 + protocol_length)])?;
+        let reserved_bytes = &bytes[(1 + protocol_length)..(1 + protocol_length + 8)];
 
         let info_hash = &bytes[(1 + protocol_length + 8)..(1 + protocol_length + 8 + 20)];
         let peer_id = &bytes[(1 + protocol_length + 8 + 20)..(1 + protocol_length + 8 + 40)];
@@ -29,6 +31,7 @@ impl Handshake {
             protocol: protocol.to_string(),
             info_hash: info_hash.try_into()?,
             peer_id: peer_id.try_into()?,
+            supports_extensions: reserved_bytes[5] & 0x10 != 0,
         })
     }
 
@@ -37,7 +40,16 @@ impl Handshake {
 
         bytes.push(self.length);
         bytes.extend(self.protocol.as_bytes());
-        bytes.extend([0, 0, 0, 0, 0, 0x10, 0, 0]);
+        bytes.extend([
+            0,
+            0,
+            0,
+            0,
+            0,
+            if self.supports_extensions { 0x10 } else { 0 },
+            0,
+            0,
+        ]);
         bytes.extend(&self.info_hash);
         bytes.extend(&self.peer_id);
 
