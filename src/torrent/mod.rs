@@ -1,5 +1,5 @@
 mod info_hash;
-mod metainfo;
+pub mod metainfo;
 
 use crate::torrent::info_hash::calculate_info_hash;
 use crate::torrent::metainfo::{SingleTorrentManifest, parse_torrent};

@@ -1,6 +1,9 @@
-use anyhow::Context;
+use anyhow::{Context, anyhow};
 
-use crate::peer::{PeerConnection, PeerMessage};
+use crate::{
+    peer::{PeerConnection, PeerMessage},
+    torrent::metainfo::TorrentInfo,
+};
 
 pub struct MagnetLink {
     pub info_hash: [u8; 20],
@@ -43,12 +46,20 @@ pub fn parse_magnet_link(magnet_link: String) -> anyhow::Result<MagnetLink> {
     });
 }
 
-pub fn get_magnet_meta(peer: &mut PeerConnection) -> anyhow::Result<()> {
+pub fn get_magnet_meta(peer: &mut PeerConnection) -> anyhow::Result<TorrentInfo> {
     let extensions = peer.negotiate_extensions()?;
 
     let message = PeerMessage::MetaDataRequest(extensions["ut_metadata"], 0);
 
-    peer.send_message(&message);
+    peer.send_message(&message)?;
 
-    return Ok(());
+    let msg = peer.handle_one()?;
+
+    match msg {
+        PeerMessage::MetaDataData(_, torrent_info) => Ok(torrent_info),
+        t => {
+            println!("Unexpected message {:?}", t);
+            return Err(anyhow!("Unexpected message {:?}", t));
+        }
+    }
 }

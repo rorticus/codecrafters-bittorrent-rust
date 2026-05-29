@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use crate::{
     bencode::{bencode_value, decode_bencoded_value},
     peer::bitfield::Bitfield,
+    torrent::metainfo::TorrentInfo,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -26,6 +27,9 @@ pub enum MessageParseError {
 
     #[error("invalid extensions packet id, expected 0 received {0}")]
     InvalidExtensions(u8),
+
+    #[error("invalid metadata")]
+    InvalidMetaData,
 }
 
 #[derive(Debug)]
@@ -54,6 +58,7 @@ pub enum PeerMessage {
     },
     ExtensionHandshake(HashMap<String, u8>),
     MetaDataRequest(u8, u16),
+    MetaDataData(u16, TorrentInfo),
 }
 
 impl TryFrom<&[u8]> for PeerMessage {
@@ -147,6 +152,24 @@ impl TryFrom<&[u8]> for PeerMessage {
                             .map_err(|_| MessageParseError::InvalidExtensions(payload[0]))?;
 
                     return Ok(PeerMessage::ExtensionHandshake(values));
+                } else if payload[0] == 16 {
+                    // meta data extension
+                    let piece_data = decode_bencoded_value(&payload[1..])
+                        .map_err(|_| MessageParseError::InvalidMetaData)?;
+                    let piece: u16 = serde_json::from_value(piece_data["piece"].clone())
+                        .map_err(|_| MessageParseError::InvalidMetaData)?;
+                    let content_length: u64 =
+                        serde_json::from_value(piece_data["total_size"].clone())
+                            .map_err(|_| MessageParseError::InvalidMetaData)?;
+
+                    let bencoded_data = &payload[(payload.len() - content_length as usize)..];
+
+                    let manifest = decode_bencoded_value(bencoded_data)
+                        .map_err(|_| MessageParseError::InvalidMetaData)?;
+                    let torrent_info: TorrentInfo = serde_json::from_value(manifest)
+                        .map_err(|_| MessageParseError::InvalidMetaData)?;
+
+                    return Ok(PeerMessage::MetaDataData(piece, torrent_info));
                 } else {
                     return Err(MessageParseError::InvalidExtensions(payload[0]));
                 }

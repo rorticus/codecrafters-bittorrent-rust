@@ -158,7 +158,16 @@ fn main() -> anyhow::Result<()> {
             } else {
                 let mut peer = PeerConnection::connect(link.info_hash, &peers[0].to_str())?;
 
-                get_magnet_meta(&mut peer)?;
+                let info = get_magnet_meta(&mut peer)?;
+
+                println!("Tracker URL: {}", link.tracker_url);
+                println!("Length: {}", info.length);
+                println!("Info Hash: {}", hex::encode(link.info_hash));
+                println!("Piece Length: {}", info.piece_length);
+                println!("Piece Hashes:");
+                info.pieces
+                    .into_iter()
+                    .for_each(|hash| println!("{}", hex::encode(hash)));
             }
         }
     }
