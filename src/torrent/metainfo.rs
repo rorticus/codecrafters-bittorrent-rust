@@ -2,7 +2,7 @@ use crate::bencode::{bencode_value, decode_bencoded_value};
 use base64::engine::{Engine, general_purpose};
 use serde::Deserialize;
 
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
 pub struct TorrentInfo {
     pub length: i64,
     pub name: String,

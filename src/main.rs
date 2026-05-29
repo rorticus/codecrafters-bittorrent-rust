@@ -5,6 +5,7 @@ mod peer;
 mod torrent;
 mod tracker;
 
+use crate::download::download_piece;
 use crate::magnet::{get_magnet_meta, parse_magnet_link};
 use crate::peer::PeerConnection;
 use crate::torrent::Torrent;
@@ -54,6 +55,12 @@ enum Command {
     },
     MagnetInfo {
         magnet_link: String,
+    },
+    MagnetDownloadPiece {
+        #[arg(short = 'o')]
+        output: String,
+        magnet_link: String,
+        piece_index: u32,
     },
 }
 
@@ -168,6 +175,29 @@ fn main() -> anyhow::Result<()> {
                 info.pieces
                     .into_iter()
                     .for_each(|hash| println!("{}", hex::encode(hash)));
+            }
+        }
+        Command::MagnetDownloadPiece {
+            output,
+            magnet_link,
+            piece_index,
+        } => {
+            let link = parse_magnet_link(magnet_link)?;
+
+            let peers = get_peers_from_magnet(&link)?;
+
+            if peers.is_empty() {
+                println!("No peers found.")
+            } else {
+                let mut peer = PeerConnection::connect(link.info_hash, &peers[0].to_str())?;
+
+                let info = get_magnet_meta(&mut peer)?;
+
+                let torrent = Torrent::from_magnet(&link, &info)?;
+
+                let piece = download_piece(&torrent, &mut peer, piece_index)?;
+
+                std::fs::write(output, &piece)?;
             }
         }
     }
