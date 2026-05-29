@@ -5,7 +5,7 @@ mod peer;
 mod torrent;
 mod tracker;
 
-use crate::magnet::parse_magnet_link;
+use crate::magnet::{get_magnet_meta, parse_magnet_link};
 use crate::peer::PeerConnection;
 use crate::torrent::Torrent;
 use crate::tracker::{get_peers, get_peers_from_magnet};
@@ -50,6 +50,9 @@ enum Command {
         magnet_link: String,
     },
     MagnetHandshake {
+        magnet_link: String,
+    },
+    MagnetInfo {
         magnet_link: String,
     },
 }
@@ -143,6 +146,19 @@ fn main() -> anyhow::Result<()> {
 
                 println!("Peer ID: {}", hex::encode(peer.peer_id));
                 println!("Peer Metadata Extension ID: {}", extensions["ut_metadata"]);
+            }
+        }
+        Command::MagnetInfo { magnet_link } => {
+            let link = parse_magnet_link(magnet_link)?;
+
+            let peers = get_peers_from_magnet(&link)?;
+
+            if peers.is_empty() {
+                println!("No peers found.")
+            } else {
+                let mut peer = PeerConnection::connect(link.info_hash, &peers[0].to_str())?;
+
+                get_magnet_meta(&mut peer)?;
             }
         }
     }

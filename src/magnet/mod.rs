@@ -1,5 +1,7 @@
 use anyhow::Context;
 
+use crate::peer::{PeerConnection, PeerMessage};
+
 pub struct MagnetLink {
     pub info_hash: [u8; 20],
     pub file_name: String,
@@ -39,4 +41,14 @@ pub fn parse_magnet_link(magnet_link: String) -> anyhow::Result<MagnetLink> {
         file_name: file_name.context("expected file name")?,
         tracker_url: tracker_url.context("expected tracker url")?,
     });
+}
+
+pub fn get_magnet_meta(peer: &mut PeerConnection) -> anyhow::Result<()> {
+    let extensions = peer.negotiate_extensions()?;
+
+    let message = PeerMessage::MetaDataRequest(extensions["ut_metadata"], 0);
+
+    peer.send_message(&message);
+
+    return Ok(());
 }

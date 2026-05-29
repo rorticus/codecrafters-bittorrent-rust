@@ -11,8 +11,6 @@ pub const MSG_EXTENDED: u8 = 20;
 
 use std::collections::HashMap;
 
-use anyhow::anyhow;
-
 use crate::{
     bencode::{bencode_value, decode_bencoded_value},
     peer::bitfield::Bitfield,
@@ -55,6 +53,7 @@ pub enum PeerMessage {
         length: u32,
     },
     ExtensionHandshake(HashMap<String, u8>),
+    MetaDataRequest(u8, u16),
 }
 
 impl TryFrom<&[u8]> for PeerMessage {
@@ -211,6 +210,21 @@ impl PeerMessage {
                     "m".to_string(),
                     serde_json::Value::Object(supported_extensions),
                 );
+
+                bytes.extend(bencode_value(&serde_json::Value::Object(payload)));
+
+                return PeerMessage::frame(MSG_EXTENDED, &bytes);
+            }
+            PeerMessage::MetaDataRequest(meta_service_id, piece) => {
+                let mut bytes: Vec<u8> = Vec::new();
+
+                // message id
+                bytes.push(*meta_service_id);
+
+                // payload
+                let mut payload = serde_json::Map::new();
+                payload.insert("msg_type".to_string(), serde_json::Value::from(0));
+                payload.insert("piece".to_string(), serde_json::Value::from(*piece as i64));
 
                 bytes.extend(bencode_value(&serde_json::Value::Object(payload)));
 
